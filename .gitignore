@@ -1,0 +1,22 @@
+# 业务数据文件（发货单 / 对账明细等真实业务表格，不上传仓库）
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.csv
+*.rar
+*.zip
+*.7z
+
+# Excel / WPS 临时文件
+~$*
+*.tmp
+
+# 工具运行时缓存与本地记忆
+.workbuddy/
+
+# 系统与编辑器杂项
+Thumbs.db
+Desktop.ini
+desktop.ini
+.DS_Store

@@ -1,0 +1,631 @@
+/*
+ * core.js — 账单/发货单 通用合并核心逻辑（浏览器 + Node 通用 UMD）
+ * 自适应跨格式：自动识别表头行、按同义词映射列、跳过主表/合计行。
+ */
+(function (global) {
+  'use strict';
+  var root = (typeof globalThis !== 'undefined') ? globalThis : global;
+  var XLSX = root.XLSX;
+  var VERSION = '1.0.0';
+
+  /* ---------------- 文本工具 ---------------- */
+
+  // 统一为可比较的“干净”文本：去换行/空白/全角空格，转小写(ASCII)
+  function clean(v) {
+    if (v === null || v === undefined) return '';
+    var s = String(v);
+    s = s.replace(/[\r\n\t ]/g, '');
+    s = s.replace(/\u3000/g, '');
+    return s;
+  }
+
+  // 展示用文本（保留空格换行但折叠空白）
+  function display(v) {
+    if (v === null || v === undefined) return '';
+    if (v instanceof Date) return fmtDate(v);
+    return String(v).replace(/\s+/g, ' ');
+  }
+
+  // 检测文本是否为“表头类”内容（含标点连续语段不算）
+  function isHeaderish(h) {
+    if (!h) return false;
+    var len = h.length;
+    if (len > 40) return false;              // 长句说明文字不像列名
+    return true;
+  }
+
+  /* ---------------- 日期工具 ---------------- */
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+
+  function fmtDate(d) {
+    if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  // 从任意值里尽量抠出一个 yyyy-mm-dd 文本
+  function toDateText(v) {
+    if (v === null || v === undefined) return '';
+    if (v instanceof Date) return fmtDate(v);
+    var s = String(v).trim();
+    if (!s) return '';
+    // 纯数字 Excel 序列号
+    if (/^\d+(\.\d+)?$/.test(s) && XLSX && XLSX.SSF) {
+      try {
+        var num = parseFloat(s);
+        if (num > 20000 && num < 80000) {
+          var d = XLSX.SSF.parse_date_code(num);
+          if (d) return d.y + '-' + pad(d.m) + '-' + pad(d.d);
+        }
+      } catch (e) { /* ignore */ }
+    }
+    // 中文/横线/斜杠日期
+    var m = s.match(/(\d{4})[年\/\-.](\d{1,2})[月\/\-.](\d{1,2})/);
+    if (m) return m[1] + '-' + pad(+m[2]) + '-' + pad(+m[3]);
+    m = s.match(/(\d{4})(\d{2})(\d{2})/);
+    if (m && m[1] > '1900') return m[1] + '-' + m[2] + '-' + m[3];
+    return '';
+  }
+
+  /* ---------------- 读取工作簿 ---------------- */
+
+  // data: ArrayBuffer 或 Uint8Array
+  function loadWorkbook(data) {
+    var wb = XLSX.read(data, { type: 'array', cellDates: true });
+    var out = { wb: wb, sheets: [] };
+    wb.SheetNames.forEach(function (name) {
+      var ws = wb.Sheets[name];
+      out.sheets.push({ name: name, ws: ws });
+    });
+    return out;
+  }
+
+  // 取工作表前 maxRows 行的预览网格（文本）
+  function previewGrid(ws, maxRows, maxCols) {
+    maxRows = maxRows || 14; maxCols = maxCols || 30;
+    var rows = [];
+    var ref = ws['!ref'];
+    if (!ref) return rows;
+    var lastR = Math.min(XLSX.utils.decode_range(ref).e.r + 1, maxRows);
+    for (var r = 0; r < lastR; r++) {
+      var line = [];
+      for (var c = 0; c < maxCols; c++) {
+        var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+        line.push(cell ? display(cell.v) : '');
+      }
+      rows.push(line);
+    }
+    return rows;
+  }
+
+  /* ---------------- 表头行自动识别 ---------------- */
+
+  // 每个单元格命中一次记一次分的强词表（表头列的典型词）
+  var STRONG_WORDS = [
+    '构件编号', '编号', '构件', '楼栋', '楼层', '类型', '型号', '规格',
+    '体积', '面积', '质量', '重量', '砼', '标号', '备注', '序号',
+    '数量', '日期', '长度', '宽度', '厚度', '名称', '编码', '强度',
+    '尺寸', '单价', '金额', '位号', '部位', '层号', '长', '宽', '厚'
+  ];
+
+  // 只统计“干净短文本”单元格，避免把整段提示/签名/批注算进去
+  function rowHeaderScore(ws, r1) {
+    var score = 0, nonEmpty = 0;
+    for (var c = 0; c < 60; c++) {
+      var cell = ws[XLSX.utils.encode_cell({ r: r1, c: c })];
+      if (!cell || cell.v === null || cell.v === undefined) continue;
+      var t = clean(cell.v);
+      if (!t) continue;
+      nonEmpty++;
+      if (t.length > 40) continue;                    // 长句不算
+      var hit = 0;
+      for (var i = 0; i < STRONG_WORDS.length; i++) {
+        if (t.indexOf(STRONG_WORDS[i]) >= 0) hit++;
+      }
+      if (hit > 0) score += 1 + Math.min(hit, 3);     // 命中词越多分越高，单格上限4
+    }
+    // 行内有内容才算候选
+    if (nonEmpty === 0) return 0;
+    score += Math.min(nonEmpty, 12);                  // 分散多列的整行表头分更高
+    return score;
+  }
+
+  // 找出得分最高的“表头行”（1-based），找不到返回 0
+  function detectHeaderRow(ws) {
+    var ref = ws['!ref'];
+    if (!ref) return 0;
+    var maxR = Math.min(XLSX.utils.decode_range(ref).e.r + 1, 40);
+    var best = 0, bestScore = 0;
+    for (var r = 0; r < maxR; r++) {
+      var s = rowHeaderScore(ws, r);
+      if (s > bestScore) { bestScore = s; best = r + 1; }
+    }
+    return bestScore >= 6 ? best : 0;
+  }
+
+  /* ---------------- 发货单 vs 主表/普通表 ---------------- */
+
+  var DELIVERY_MARKERS = [
+    '项目名称', '客户姓名', '客户', '运输车号', '运输人', '运输公司',
+    '出库', '收货', '发货单', '送货', '司机', '承运', '打印时间'
+  ];
+
+  // 表头上方(前若干行)是否有单据头信息
+  function hasDeliveryMarkers(ws, headerRow) {
+    var upto = headerRow > 0 ? Math.min(headerRow - 1, 9) : 8;
+    var ref = ws['!ref'];
+    if (!ref) return false;
+    var rmax = Math.min(XLSX.utils.decode_range(ref).e.r + 1, upto);
+    for (var r = 0; r < rmax; r++) {
+      for (var c = 0; c < 40; c++) {
+        var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+        if (!cell) continue;
+        var t = clean(cell.v);
+        if (!t) continue;
+        for (var i = 0; i < DELIVERY_MARKERS.length; i++) {
+          if (t.indexOf(DELIVERY_MARKERS[i]) >= 0) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /* ---------------- 列同义词映射 ---------------- */
+
+  // 目标列名 -> 匹配规则(clean 后文本)。返回 true 即命中。
+  // 注意顺序即优先级，一个源列只被一个目标列消费。
+  var SYNONYMS = {
+    '序号': function (h) { return h === '序号' || h === '序' || /^序号/.test(h); },
+    '构件编号': function (h) {
+      return h.indexOf('构件编号') >= 0 ||
+             (h.indexOf('构件') >= 0 && h.indexOf('编号') >= 0) ||
+             h.indexOf('编码') >= 0 ||
+             (h.indexOf('编号') >= 0 && h.indexOf('序号') < 0) ||
+             h === '编号';
+    },
+    '楼栋': function (h) {
+      return h.indexOf('楼栋') >= 0 || h.indexOf('楼号') >= 0 ||
+             h.indexOf('栋号') >= 0 || /^号楼/.test(h) || h === '楼栋号';
+    },
+    '楼层': function (h) {
+      return h.indexOf('楼层') >= 0 || h === '层' || h === '层号' ||
+             h.indexOf('层号') >= 0;
+    },
+    '构件类型': function (h) {
+      return h.indexOf('构件类型') >= 0 || h.indexOf('构件名称') >= 0 ||
+             h.indexOf('类型') >= 0 || h.indexOf('型号') >= 0 ||
+             h.indexOf('类别') >= 0 || h.indexOf('名称') >= 0;
+    },
+    // '单块体积'与'单块面积'合并为一列：源表通常带/不带单位字眼（m³/m²/方量/砼量）
+    // 直接统一识别为单模板列 → 源列写\"单块体积\"、\"单块体积(m³)\"、\"单块面积\"、\"单块面积(m²)\"、\"m³体积\"、\"m²面积\" 等都匹配同一列
+    '单块体积/面积': function (h) {
+      return h.indexOf('体积') >= 0 || h.indexOf('面积') >= 0 ||
+             h.indexOf('方量') >= 0 || h.indexOf('砼量') >= 0 ||
+             h.indexOf('m3') >= 0 || h.indexOf('m²') >= 0 || h.indexOf('m2') >= 0;
+    },
+    '单体质量': function (h) {
+      return h.indexOf('质量') >= 0 || h.indexOf('重量') >= 0 || h.indexOf('吨') >= 0;
+    },
+    '板宽(mm)': function (h) { return h.indexOf('板宽') >= 0 || h.indexOf('宽度') >= 0 || h === '宽'; },
+    '板长(mm)': function (h) { return h.indexOf('板长') >= 0 || h.indexOf('长度') >= 0 || h === '长'; },
+    '板厚(mm)': function (h) { return h.indexOf('板厚') >= 0 || h.indexOf('厚度') >= 0 || h === '厚'; },
+    '砼标号': function (h) {
+      return h.indexOf('砼') >= 0 || h.indexOf('强度') >= 0 || h === '标号';
+    },
+    '备注': function (h) { return h === '备注' || h === '注' || h === '说明' || h === '备注/说明'; }
+  };
+
+  // 读表头行文本数组
+  function headerTexts(ws, headerRow, maxCols) {
+    maxCols = maxCols || 80;
+    var arr = [];
+    for (var c = 0; c < maxCols; c++) {
+      var cell = ws[XLSX.utils.encode_cell({ r: headerRow - 1, c: c })];
+      arr.push(cell ? clean(cell.v) : '');
+    }
+    return arr;
+  }
+
+  // 兜底匹配：目标列名与源表头做“包含/去单位”宽松比较（用于用户自定义列名）
+  function genericFor(name) {
+    return function (h) {
+      if (!name) return false;
+      var tn = clean(name).replace(/[（(].*?[)）]/g, '');   // 去掉 (mm)/(m³) 等单位后缀
+      if (!tn) return false;
+      if (h === tn) return true;
+      if (tn.length >= 2 && h.length >= 2 && (h.indexOf(tn) >= 0 || tn.indexOf(h) >= 0)) return true;
+      return false;
+    };
+  }
+
+  // 对一张表做列映射：返回 {colName: {idx, text}}；consumed 防止一列多配
+  function mapColumns(ws, headerRow, headers) {
+    var texts = headerTexts(ws, headerRow);
+    var consumed = {};
+    var map = {};
+    headers.forEach(function (name) {
+      map[name] = null;
+      if (name === '发货时间') return;             // 特殊列，不占源列
+      var fn = SYNONYMS[name] || genericFor(name);
+      if (!fn) return;
+      for (var i = 0; i < texts.length; i++) {
+        if (consumed[i] || !texts[i] || !isHeaderish(texts[i])) continue;
+        if (fn(texts[i])) {
+          consumed[i] = true;
+          map[name] = { idx: i, text: texts[i] };
+          break;
+        }
+      }
+    });
+    return map;
+  }
+
+  /* ---------------- 发货时间识别 ---------------- */
+
+  // 从表头区解析发货日期文本；找不到返回 ''
+  function parseSheetDate(ws) {
+    var ref = ws['!ref'];
+    var rmax = ref ? Math.min(XLSX.utils.decode_range(ref).e.r + 1, 9) : 9;
+    for (var r = 0; r < rmax; r++) {
+      for (var c = 0; c < 30; c++) {
+        var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+        if (!cell || cell.v === null || cell.v === undefined) continue;
+        var dt = toDateText(cell.v);
+        if (dt) return dt;
+      }
+    }
+    return '';
+  }
+
+  /* ---------------- 主合并逻辑 ---------------- */
+
+  /*
+   * config = {
+   *   files: [ { name, wb } ],            // 已 load 的工作簿
+   *   sheets: { "<文件名>": { "<表名>": {
+   *        include: bool,
+   *        headerRow: int (>0 有效),
+   *        dateFixed: '' | 'yyyy-mm-dd'   // 本表强制日期（可选）
+   *   } } },
+   *   cols: [ { name, enabled,
+   *             matchHeader?: string      // 手动指定源表头文本（数据列）
+   *             date?: { mode:'auto'|'fixed'|'col', fixed?:string, col?:string }  // 发货时间专用
+   *   } ]
+   * }
+   * 返回 { headers, rows, stats, warnings }
+   */
+  function merge(config) {
+    var headers = [], dateEntry = null, dataCols = [];
+    config.cols.forEach(function (c) {
+      if (!c.enabled) return;
+      headers.push(c.name);
+      if (c.name === '发货时间') dateEntry = c;
+      else dataCols.push(c);
+    });
+    var rows = [];
+    var warnings = [];
+    var stats = {};           // 文件名 -> 行数
+    var dateColIdx = headers.indexOf('发货时间');
+
+    // 在指定表里按“手动指定表头文本”精确找列
+    function findByHeader(ws, headerRow, text) {
+      var arr = headerTexts(ws, headerRow);
+      var t = clean(text);
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i] === t) return i;
+      }
+      return -1;
+    }
+
+    config.files.forEach(function (f) {
+      var fn = f.name;
+      var sheetCfg = (config.sheets[fn] || {});
+      var wb = f.wb;
+      wb.SheetNames.forEach(function (sn) {
+        var sc = (sheetCfg[sn] || {});
+        if (!sc.include || !sc.headerRow) return;
+        var ws = wb.Sheets[sn];
+        var headerRow = sc.headerRow;
+
+        // ---- 列映射 ----
+        var map = {};
+        // 1) 自动匹配（synonym / generic）
+        var autoNames = dataCols.filter(function (c) { return !c.matchHeader; }).map(function (c) { return c.name; });
+        var autoMap = mapColumns(ws, headerRow, autoNames);
+        dataCols.forEach(function (c) {
+          if (c.matchHeader) {
+            var idx = findByHeader(ws, headerRow, c.matchHeader);
+            map[c.name] = idx >= 0 ? { idx: idx, text: c.matchHeader } : null;
+          } else {
+            map[c.name] = autoMap[c.name] || null;
+          }
+        });
+
+        // ---- 主键列 ----
+        var keyCol = map['构件编号'] ? map['构件编号'].idx
+                   : (function () { for (var i = 0; i < dataCols.length; i++) { if (map[dataCols[i].name]) return map[dataCols[i].name].idx; } return -1; })();
+        if (keyCol < 0) {
+          warnings.push(fn + ' / ' + sn + ': 未匹配到任何数据列，已跳过');
+          return;
+        }
+
+        // ---- 日期解析方式 ----
+        var dColIdx = -1;                 // 'col' 模式：本表里日期列位置
+        if (dateEntry && dateEntry.date && dateEntry.date.mode === 'col') {
+          dColIdx = findByHeader(ws, headerRow, dateEntry.date.col);
+        }
+        var baseDate = sc.dateFixed || (dateEntry && dateEntry.date && dateEntry.date.mode === 'fixed' ? (dateEntry.date.fixed || '') : '') || '';
+        if (!baseDate) baseDate = parseSheetDate(ws);   // auto 兜底
+
+        // ---- 数据行范围 ----
+        var ref = ws['!ref'];
+        var maxR = ref ? XLSX.utils.decode_range(ref).e.r + 1 : headerRow + 1;
+        var lastData = headerRow + 1;
+        for (var r = headerRow; r < maxR; r++) {
+          var isEmpty = true;
+          for (var i = 0; i < dataCols.length; i++) {
+            var m = map[dataCols[i].name];
+            if (!m) continue;
+            var cv = ws[XLSX.utils.encode_cell({ r: r, c: m.idx })];
+            if (cv && cv.v !== null && cv.v !== undefined && String(cv.v).trim() !== '') { isEmpty = false; break; }
+          }
+          if (!isEmpty) lastData = r + 1;
+        }
+
+        var fileRows = 0;
+        for (var r2 = headerRow; r2 < lastData; r2++) {
+          var kcell = ws[XLSX.utils.encode_cell({ r: r2, c: keyCol })];
+          var kv = kcell ? kcell.v : null;
+          if (kv === null || kv === undefined) continue;
+          var kt = String(kv).trim();
+          if (!kt) continue;
+          if (/合计|总计|小计|SUM/i.test(kt)) continue;      // 汇总行
+          var out = [];
+          for (var hi = 0; hi < headers.length; hi++) {
+            var hname = headers[hi];
+            if (hname === '发货时间') {
+              if (dColIdx >= 0) {
+                var dc = ws[XLSX.utils.encode_cell({ r: r2, c: dColIdx })];
+                out.push(dc ? toDateText(dc.v) : '');
+              } else {
+                out.push(baseDate || '');
+              }
+              continue;
+            }
+            var mm = map[hname];
+            if (!mm) { out.push(''); continue; }
+            var cell = ws[XLSX.utils.encode_cell({ r: r2, c: mm.idx })];
+            var val = cell ? cell.v : null;
+            if (val instanceof Date) val = fmtDate(val);
+            else if (typeof val === 'string') val = val.trim();
+            out.push(val === null || val === undefined ? '' : val);
+          }
+          rows.push(out);
+          fileRows++;
+        }
+        stats[fn] = (stats[fn] || 0) + fileRows;
+        var missing = dataCols.filter(function (c) { return map[c.name] === null; }).map(function (c) { return c.name; });
+        if (missing.length && fileRows > 0) {
+          warnings.push(fn + ' / ' + sn + ': 未找到列 ' + missing.join('、') + '（留空）');
+        }
+      });
+    });
+    return { headers: headers, rows: rows, stats: stats, warnings: warnings };
+  }
+
+  /* ================= 台账生成（供货明细模板） =================
+   * 输入 dataRows（调用方已从合并结果提取好字段）：
+   *   { d:'yyyy-mm-dd' 发货日期, bld, fl, type, code:文本,
+   *     w, l, h: 板宽/长/厚(拼规格型号), vol, area, c:忽略 }
+   * opts = { title, priceRules, segment:{mode:'month'|'cutday'|'single', cutDay},
+   *          singleLabel, bldOrder:[楼栋页顺序] }
+   * priceRules: [{label, kw[], exclude[], unit:'体积'|'面积', price}] 按顺序首中即用；
+   *   规则顺序同时决定同一天内小计块的排列顺序
+   * 小计块口径 = (页楼栋 + 发货日期 + 产品名)合并一块，尾部跟“小计：”
+   * 返回 { pages:[{name, aoa, mark, amount}], warnings:[...] }
+   */
+  function buildLedger(dataRows, opts) {
+    opts = opts || {};
+    var title = opts.title || '预制构件供货明细';
+    var rules = opts.priceRules && opts.priceRules.length ? opts.priceRules
+      : [{ label: 'PC叠合板', kw: ['叠合板'], exclude: ['桁架'], unit: '体积', price: 2300 },
+         { label: 'PC楼梯', kw: ['楼梯'], exclude: [], unit: '体积', price: 2500 },
+         { label: '钢管桁架预应力叠合板', kw: ['桁架'], exclude: [], unit: '面积', price: 160 }];
+    var seg = opts.segment || { mode: 'month', cutDay: 26 };
+    var segMode = seg.mode || 'month';
+    var cutDay = seg.cutDay || 26;
+    var warnings = [];
+
+    function num(v) { var n = parseFloat(v); return isNaN(n) ? null : n; }
+    function segKeyOf(d) {
+      if (!/^\d{4}-\d{2}-\d{2}/.test(d || '')) return { key: 0, label: '' };
+      var y = +d.slice(0, 4), m = +d.slice(5, 7), day = +d.slice(8, 10);
+      if (segMode === 'cutday') {
+        if (day >= cutDay) return { key: y * 100 + m, label: m + '月' };
+        var py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1;
+        return { key: py * 100 + pm, label: pm + '月' };
+      }
+      return { key: y * 100 + m, label: m + '月' };
+    }
+    function pct(x) { return Math.round(x * 100) / 100; }
+
+    var recs = [];
+    dataRows.forEach(function (r) {
+      var bld = clean(r.bld);
+      if (!bld) { warnings.push('明细缺少楼栋（' + (r.code || '?') + '），已跳过该行'); return; }
+      var type = clean(r.type);
+      var rule = null, ruleIdx = 1e9, ri, k;
+      for (ri = 0; ri < rules.length; ri++) {
+        var rr = rules[ri], hit = false;
+        for (k = 0; k < (rr.kw || []).length; k++) if (type.indexOf(rr.kw[k]) >= 0) { hit = true; break; }
+        if (!hit) continue;
+        var bad = false;
+        for (k = 0; k < (rr.exclude || []).length; k++) if (type.indexOf(rr.exclude[k]) >= 0) { bad = true; break; }
+        if (!bad) { rule = rr; ruleIdx = ri; break; }
+      }
+      var w = num(r.w), l = num(r.l), h = num(r.h);
+      var spec = (w !== null && l !== null && h !== null) ? w + '*' + l + '*' + h : '';
+      if (!rule) {
+        warnings.push('构件类型“' + (type || '(空)') + '”未匹配计价规则（' + bld + ' ' + (r.code || '') + '），按单价0记入，请检查');
+        rule = { label: type || '未分类', unit: '体积', price: 0 };
+      }
+      var qty = num(rule.unit === '面积' ? r.area : r.vol);
+      if (qty === null || qty < 0) {
+        qty = '';
+        warnings.push('构件缺少' + (rule.unit === '面积' ? '面积' : '体积') + '：' + rule.label + ' ' + (r.code || '') + '（' + bld + '），金额留空');
+      }
+      recs.push({
+        c: r.c || 0, d: r.d || '', bld: bld, fl: clean(r.fl), li: ruleIdx,
+        label: rule.label, price: rule.price, unit: rule.unit,
+        code: String(r.code == null ? '' : r.code).trim(), spec: spec,
+        qty: qty === '' ? '' : qty,
+        amt: qty === '' ? '' : pct(qty * rule.price)
+      });
+    });
+
+    var maxLbl = '';
+    recs.forEach(function (r) {
+      var sk = segKeyOf(r.d);
+      if (segMode === 'single') { r.sk = 1; r.sl = ''; return; }
+      r.sk = sk.key; r.sl = sk.label;
+      if (sk.label) maxLbl = sk.label;
+    });
+    var singleLabel = segMode === 'single' ? (opts.singleLabel || maxLbl || '') : '';
+
+    var pageSeen = {}, seenDate = {}, pageList = [];
+    recs.forEach(function (r) {
+      if (!pageSeen[r.bld]) { pageSeen[r.bld] = true; seenDate[r.bld] = r.d; pageList.push(r.bld); }
+    });
+    var prefer = (opts.bldOrder || []).map(function (b) { return clean(b); });
+    pageList.sort(function (a, b) {
+      var ia = prefer.indexOf(a), ib = prefer.indexOf(b);
+      if (ia >= 0 || ib >= 0) {
+        if (ia >= 0 && ib >= 0) return ia - ib;
+        return ia >= 0 ? -1 : 1;
+      }
+      return seenDate[a] < seenDate[b] ? -1 : seenDate[a] > seenDate[b] ? 1 : 0;
+    });
+
+    var HEAD = ['日期', '产品名称', '构件编号', '规格型号', '楼栋', '楼层', '单块体积/面积', '含税单价', '含税金额'];
+    var pages = [];
+    pageList.forEach(function (bld) {
+      // 小计块口径 = (发货日期 + 产品名)：同一天同楼栋同类构件合并一块（对应样例台账的小计）
+      var cars = {}, orderC = [];
+      recs.forEach(function (r) {
+        if (r.bld !== bld) return;
+        var key = r.d + '\u0001' + r.label;
+        if (!cars[key]) { cars[key] = { key: key, d: r.d, label: r.label, li: r.li, rows: [] }; orderC.push(key); }
+        var car = cars[key];
+        car.rows.push(r);
+      });
+      var carArr = orderC.map(function (key) { return cars[key]; });
+      carArr.sort(function (a, b) {
+        var ka = segKeyOf(a.d).key || 1, kb = segKeyOf(b.d).key || 1;
+        if (ka !== kb) return ka - kb;
+        if (a.d !== b.d) return a.d < b.d ? -1 : 1;
+        if (a.li !== b.li) return a.li - b.li;
+        return 0;
+      });
+      var segs = [], cur = null;
+      carArr.forEach(function (car) {
+        var key = segMode === 'single' ? 1 : (segKeyOf(car.d).key || 0);
+        if (!cur || cur.key !== key) {
+          cur = { key: key, cars: [], label: segMode === 'single' ? singleLabel : (segKeyOf(car.d).label || '') };
+          segs.push(cur);
+        }
+        cur.cars.push(car);
+      });
+      var aoa = [[title, '', '', '', '', '', '', '', '']];
+      var mark = [{ r: 0, label: title, kind: 'title' }];
+      var pageTotal = 0, first = true;
+      segs.forEach(function (sg) {
+        aoa.push([sg.label, '', '', '', '', '', '', '', '']);
+        mark.push({ r: aoa.length - 1, label: sg.label, kind: 'segname' });
+        if (first) { aoa.push(HEAD.slice()); mark.push({ r: aoa.length - 1, label: '', kind: 'hdr' }); first = false; }
+        var sgSum = 0;
+        sg.cars.forEach(function (car) {
+          var carSum = 0;
+          car.rows.forEach(function (r) {
+            aoa.push([r.d, r.label, r.code, r.spec, r.bld, r.fl, r.qty, r.price, r.amt]);
+            mark.push({ r: aoa.length - 1, label: r.code, kind: 'data' });
+            carSum += (typeof r.amt === 'number' ? r.amt : 0);
+          });
+          sgSum += carSum;
+          aoa.push(['小计：', '', '', '', '', '', '', '', pct(carSum)]);
+          mark.push({ r: aoa.length - 1, label: '小计', kind: 'sub' });
+        });
+        pageTotal += sgSum;
+        aoa.push(['本月合计：', '', '', '', '', '', '', '', pct(sgSum)]);
+        mark.push({ r: aoa.length - 1, label: '本月合计', kind: 'segsum' });
+      });
+      if (segs.length > 1) {
+        aoa.push(['总计：', '', '', '', '', '', '', '', pct(pageTotal)]);
+        mark.push({ r: aoa.length - 1, label: '总计', kind: 'total' });
+      }
+      pages.push({ name: bld, aoa: aoa, mark: mark, amount: pct(pageTotal) });
+    });
+
+    function uniqWarn(list) {
+      var cnt = {}, ord = [];
+      list.forEach(function (m) { if (!(m in cnt)) { cnt[m] = 0; ord.push(m); } cnt[m]++; });
+      return ord.map(function (m) { return cnt[m] > 1 ? m + '（共 ' + cnt[m] + ' 条）' : m; });
+    }
+    return { pages: pages, warnings: uniqWarn(warnings) };
+  }
+
+  /* ---------------- 导出（浏览器用） ---------------- */
+  function exportWorkbook(rows, headers, sheetName) {
+    var aoa = [headers].concat(rows);
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName || '汇总');
+    return wb;
+  }
+
+  // 台账导出：pages=[{name,aoa,mark}] → 每楼栋一页，标题/段名/小计/合计行做横向合并
+  function exportLedgerWorkbook(pages) {
+    var wb = XLSX.utils.book_new();
+    var used = {};
+    (pages || []).forEach(function (pg, pi) {
+      if (!pg || !pg.aoa || !pg.aoa.length) return;
+      var ws = XLSX.utils.aoa_to_sheet(pg.aoa);
+      var merges = [];
+      (pg.mark || []).forEach(function (m) {
+        var r = m.r;
+        if (!m.kind) return;
+        if (m.kind === 'title' || m.kind === 'segname') merges.push({ s: { r: r, c: 0 }, e: { r: r, c: 8 } });
+        else if (m.kind === 'sub' || m.kind === 'segsum' || m.kind === 'total') merges.push({ s: { r: r, c: 0 }, e: { r: r, c: 7 } });
+      });
+      if (merges.length) ws['!merges'] = merges;
+      ws['!cols'] = [{ wch: 11 }, { wch: 18 }, { wch: 15 }, { wch: 15 }, { wch: 9 }, { wch: 9 }, { wch: 12 }, { wch: 9 }, { wch: 12 }];
+      var nm = String(pg.name == null ? '页' + (pi + 1) : pg.name).replace(/[\\\/\?\*\[\]:]/g, '').slice(0, 31) || ('页' + (pi + 1));
+      var base = nm, k = 2;
+      while (used[nm]) nm = base.slice(0, 28) + '(' + (k++) + ')';
+      used[nm] = 1;
+      XLSX.utils.book_append_sheet(wb, ws, nm);
+    });
+    return wb;
+  }
+
+  /* ---------------- 导出接口 ---------------- */
+  var api = {
+    VERSION: VERSION,
+    loadWorkbook: loadWorkbook,
+    previewGrid: previewGrid,
+    detectHeaderRow: detectHeaderRow,
+    hasDeliveryMarkers: hasDeliveryMarkers,
+    mapColumns: mapColumns,
+    headerTexts: headerTexts,
+    parseSheetDate: parseSheetDate,
+    toDateText: toDateText,
+    clean: clean,
+    merge: merge,
+    buildLedger: buildLedger,
+    exportWorkbook: exportWorkbook,
+    exportLedgerWorkbook: exportLedgerWorkbook,
+    SYNONYMS: SYNONYMS
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  (typeof globalThis !== 'undefined' ? globalThis : global).BillMerge = api;
+})(this);

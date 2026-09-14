@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>账单合并工具 · 本地离线版</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
+    --accent:#2563eb; --accent2:#1d4ed8; --ok:#0d9488; --warn:#d97706; --bad:#dc2626;
+    --headbg:#eef2f7; --code:#0f4c9e;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,Arial,sans-serif;}
+  header{padding:18px 28px;background:linear-gradient(120deg,#1e40af,#2563eb);color:#fff;
+    display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;}
+  header h1{margin:0;font-size:20px;letter-spacing:.5px;}
+  header span{font-size:12px;opacity:.85;}
+  main{max-width:1180px;margin:0 auto;padding:20px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(16,24,40,.04);}
+  .step-tag{display:inline-block;min-width:24px;height:24px;line-height:24px;text-align:center;
+    background:var(--accent);color:#fff;border-radius:50%;font-weight:700;font-size:13px;margin-right:8px;}
+  .card>h2{display:flex;align-items:center;margin:0 0 12px;font-size:16px;}
+  .card>h2 small{font-weight:400;color:var(--sub);margin-left:8px;font-size:12px;}
+  .muted{color:var(--sub);font-size:12.5px;}
+  button{background:var(--accent);color:#fff;border:0;border-radius:7px;padding:8px 16px;
+    font-size:13.5px;cursor:pointer;transition:.15s;}
+  button:hover{background:var(--accent2);}
+  button.ghost{background:#fff;color:var(--accent);border:1px solid #c7d4ef;}
+  button.ghost:hover{background:#eef4ff;}
+  button:disabled{opacity:.5;cursor:not-allowed;}
+  input[type=text],input[type=date],select{height:30px;padding:2px 8px;border:1px solid var(--line);
+    border-radius:6px;font-size:13px;color:var(--txt);background:#fff;}
+  input[type=text]:focus,select:focus{outline:2px solid #bcd0f8;border-color:var(--accent);}
+  /* drop zone */
+  #drop{border:2px dashed #b9c6dc;border-radius:10px;padding:34px 16px;text-align:center;
+    background:#fbfcfe;cursor:pointer;transition:.15s;color:var(--sub);}
+  #drop.drag{border-color:var(--accent);background:#eef4ff;color:var(--accent);}
+  #drop b{color:var(--accent);}
+  #fileList{display:none;margin-top:12px;}
+  /* file cards */
+  details.fileCard{border:1px solid var(--line);border-radius:9px;margin-top:10px;background:#fff;}
+  details.fileCard>summary{cursor:pointer;padding:10px 14px;list-style:none;display:flex;
+    align-items:center;gap:10px;flex-wrap:wrap;}
+  details.fileCard>summary::-webkit-details-marker{display:none;}
+  .fname{font-weight:600;word-break:break-all;}
+  .fstat{margin-left:auto;font-size:12px;color:var(--sub);white-space:nowrap;}
+  .sheetWrap{padding:2px 14px 12px;border-top:1px dashed var(--line);}
+  .sheetRow{display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid #f0f2f6;
+    font-size:13px;flex-wrap:wrap;}
+  .sheetRow:last-child{border-bottom:0;}
+  .sheetRow .sname{min-width:180px;word-break:break-all;}
+  .tag{font-size:11px;padding:1px 7px;border-radius:10px;white-space:nowrap;}
+  .tag.delivery{background:#e0f2fe;color:#0369a1;}
+  .tag.master{background:#f1f5f9;color:#475569;}
+  .tag.plain{background:#fef3c7;color:#92400e;}
+  .tag.warn{background:#fee2e2;color:#b91c1c;}
+  .hrow{display:inline-flex;align-items:center;gap:4px;}
+  .hrow select{width:64px;height:24px;font-size:12px;}
+  .previewBtn{background:none;border:0;color:var(--code);cursor:pointer;font-size:12px;padding:0;text-decoration:underline;}
+  .miniTbl{display:none;overflow:auto;max-height:220px;margin:6px 0 2px;border:1px solid var(--line);border-radius:6px;}
+  .miniTbl table{border-collapse:collapse;font-size:11.5px;white-space:nowrap;}
+  .miniTbl th,.miniTbl td{border:1px solid #e8ecf2;padding:2px 8px;}
+  .miniTbl th{background:var(--headbg);position:sticky;top:0;}
+  .miniTbl tr.hl td{background:#fff7e0;font-weight:600;}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap;}
+  /* mapping */
+  #mapWrap{overflow-x:auto;}
+  table.map{border-collapse:collapse;width:100%;font-size:13px;}
+  table.map th,table.map td{border:1px solid var(--line);padding:6px 8px;text-align:left;}
+  table.map th{background:var(--headbg);white-space:nowrap;}
+  table.map td.num{color:var(--sub);font-size:12px;}
+  .ok{color:var(--ok);} .no{color:var(--bad);} .warnc{color:var(--warn);}
+  .dateRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;}
+  /* result */
+  #result{display:none;}
+  #resStats{display:flex;gap:22px;flex-wrap:wrap;margin:8px 0;}
+  #resStats .big{font-size:26px;font-weight:700;color:var(--accent);}
+  #resStats .lab{font-size:12px;color:var(--sub);}
+  #warnBox{max-height:130px;overflow:auto;background:#fff8eb;border:1px solid #f3e0b8;border-radius:7px;
+    padding:8px 12px;font-size:12.5px;color:#7c5315;display:none;margin-top:8px;}
+  #previewTblWrap{overflow:auto;max-height:340px;border:1px solid var(--line);border-radius:8px;margin-top:8px;}
+  #previewTbl{border-collapse:collapse;font-size:12.5px;white-space:nowrap;}
+  #previewTbl th,#previewTbl td{border:1px solid #e8ecf2;padding:3px 10px;}
+  #previewTbl th{background:var(--headbg);position:sticky;top:0;}
+  #footerTxt{color:var(--sub);font-size:12px;text-align:center;padding:6px 0 22px;}
+  /* 右上角浮动“重新选文件”按钮 */
+  #btnRestart{position:fixed;top:14px;right:16px;z-index:900;background:#fff;color:var(--accent);
+    border:1px solid #fff;box-shadow:0 3px 10px rgba(15,23,42,.16);}
+  #btnRestart:hover{background:#eef4ff;color:var(--accent2);}
+  .notice{background:#eff6ff;border:1px solid #c7d8f7;color:#1e3a8a;border-radius:8px;padding:10px 14px;font-size:13px;}
+  input.extraName{width:150px;} select.extraSel{max-width:330px;}
+  .delExtra{color:var(--bad);cursor:pointer;border:0;background:none;font-size:16px;line-height:1;padding:2px 6px;}
+  /* ===== 步骤5: 生成台账 ===== */
+  #cardLedger .lgGrid{display:flex;gap:14px 22px;flex-wrap:wrap;align-items:flex-end;}
+  #cardLedger .lgItem{display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--sub);}
+  #cardLedger .lgItem input,#cardLedger .lgItem select{color:var(--txt);}
+  #cardLedger .lgItem input[type=date]{width:132px;}
+  table.lgRules{border-collapse:collapse;margin-top:6px;width:100%;font-size:13px;}
+  table.lgRules th,table.lgRules td{border:1px solid var(--line);padding:5px 9px;text-align:left;}
+  table.lgRules th{background:var(--headbg);white-space:nowrap;font-weight:600;}
+  table.lgRules .ruleDel{color:var(--bad);cursor:pointer;border:0;background:none;font-size:15px;}
+  .lgPageBar{display:flex;align-items:center;gap:8px;margin:10px 0 6px;flex-wrap:wrap;}
+  #lgStats{display:flex;gap:22px;flex-wrap:wrap;margin:8px 0;}
+  #lgStats .big{font-size:24px;font-weight:700;color:var(--accent);}
+  #lgStats .lab{font-size:12px;color:var(--sub);}
+  #lgWarn{max-height:120px;overflow:auto;background:#fff8eb;border:1px solid #f3e0b8;border-radius:7px;
+    padding:8px 12px;font-size:12.5px;color:#7c5315;margin-top:8px;}
+  #lgPreviewWrap{overflow:auto;max-height:460px;border:1px solid var(--line);border-radius:8px;}
+  table.lgTbl{border-collapse:collapse;font-size:12.5px;white-space:nowrap;width:100%;}
+  table.lgTbl th,table.lgTbl td{border:1px solid #e8ecf2;padding:3px 10px;}
+  table.lgTbl th{background:var(--headbg);position:sticky;top:0;z-index:2;}
+  table.lgTbl tr.k-title td{background:#dbe7fb;font-weight:700;}
+  table.lgTbl tr.k-segname td{background:#e8f3ec;font-weight:700;color:#0f5c3c;}
+  table.lgTbl tr.k-sub td,table.lgTbl tr.k-segsum td,table.lgTbl tr.k-total td{background:#f6f2e7;font-weight:700;}
+  table.lgTbl tr.k-total td{background:#efe9f7;color:#5b21b6;}
+  table.lgTbl td.num{text-align:right;font-variant-numeric:tabular-nums;}
+</style>
+</head>
+<body>
+<header>
+  <h1>🧾 账单 / 发货单 合并工具</h1>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · v1.0</span>
+</header>
+<button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
+
+<main>
+  <!-- 步骤1: 选文件 -->
+  <div class="card">
+    <h2><span class="step-tag">1</span>选择文件<small>支持 .xlsx，可一次选多个或拖进来</small></h2>
+    <div id="drop">
+      <div style="font-size:15px;">📂 点击选择文件，或把 Excel 文件<b>拖到这里</b></div>
+      <div class="muted" style="margin-top:4px;">程序会自动跳过上次的输出文件和以 ~$ 开头的临时文件</div>
+    </div>
+    <input id="fileInput" type="file" accept=".xlsx" multiple style="display:none;">
+    <div id="fileList"></div>
+  </div>
+
+  <!-- 步骤2: 工作表核对 -->
+  <div class="card" id="cardSheets" style="display:none;">
+    <h2><span class="step-tag">2</span>核对工作表与表头行<small>程序已自动识别，个别不对可手动改行号或勾选</small></h2>
+    <div class="notice">
+      ✔ 已自动<b>取消勾选</b>“构件编码 / 主表 / 无单据头”的工作表；已自动定位每个表的<b>表头行</b>。
+      若某张表没被勾上或表头行不对，展开文件手动调整即可。
+    </div>
+    <div id="sheetList"></div>
+    <div class="toolbar">
+      <button id="btnUncheckAll" class="ghost">全部取消勾选</button>
+      <button id="btnCheckDelivery" class="ghost">只勾“发货单/出库单”类</button>
+      <button id="btnCheckAll" class="ghost">全部勾选</button>
+      <span class="muted" id="checkCount"></span>
+    </div>
+  </div>
+
+  <!-- 步骤3: 输出列与日期 -->
+  <div class="card" id="cardMap" style="display:none;">
+    <h2><span class="step-tag">3</span>输出列 & 发货时间<small>以第一张被勾选的表作为“样例”推荐映射，可按需调整</small></h2>
+    <div id="mapWrap"></div>
+    <div class="toolbar">
+      <button id="btnAddCol" class="ghost">＋ 添加自定义输出列</button>
+      <button id="btnResetMap" class="ghost">恢复默认推荐</button>
+    </div>
+  </div>
+
+  <!-- 步骤4: 合并 -->
+  <div class="card">
+    <h2><span class="step-tag">4</span>合并 & 导出</h2>
+    <div class="toolbar">
+      <button id="btnMerge">合并并预览</button>
+      <label class="muted">导出文件名
+        <input type="text" id="outName" value="发货明细汇总.xlsx" style="width:190px;">
+      </label>
+    </div>
+    <div id="result">
+      <div id="resStats"></div>
+      <div id="warnBox"></div>
+      <div class="muted">预览（前 20 行，导出为完整数据）：</div>
+      <div id="previewTblWrap"><table id="previewTbl"></table></div>
+      <div class="toolbar" style="margin-top:10px;">
+        <button id="btnExport">⬇ 导出 Excel</button>
+        <button id="btnAgain" class="ghost">重新合并</button>
+      </div>
+    </div>
+  </div>
+  <!-- 步骤5: 由合并结果生成台账 -->
+  <div class="card" id="cardLedger" style="display:none;">
+    <h2><span class="step-tag">5</span>由合并结果生成“供货明细台账”<small>按楼栋分页，叠合板/楼梯/桁架板自动计价；同一天同类构件合并一个小计</small></h2>
+    <div class="lgGrid">
+      <label class="lgItem">台账标题
+        <input type="text" id="lgTitle" value="百德·尚谷大院预制构件供货明细" style="width:330px;">
+      </label>
+      <label class="lgItem">分段方式
+        <select id="lgSeg">
+          <option value="cutday" selected>结算周期：账单起始日(默认26日)至次月25日</option>
+          <option value="month">自然月（1日～月末）</option>
+          <option value="single">整批合并为一段</option>
+        </select>
+      </label>
+      <label class="lgItem" id="cutDayWrap">账单起始日
+        <input type="number" id="lgCutDay" value="26" min="1" max="31" style="width:76px;">
+      </label>
+      <label class="lgItem" title="样例手工台账的日期=发货单日期-1天，如需一致可填 -1；默认 0 即按发货单日期">
+        日期偏移(天)
+        <input type="number" id="lgDayOff" value="0" style="width:76px;">
+      </label>
+      <label class="lgItem" title="只统计该日期范围内的行（按偏移后的日期），留空=全部">
+        仅统计日期范围(可空)
+        <span style="display:inline-flex;gap:6px;"><input type="date" id="lgFrom"><input type="date" id="lgTo"></span>
+      </label>
+    </div>
+    <div class="muted" style="margin:12px 0 4px;">计价规则（决定输出“产品名称 / 单块体积·面积 / 含税单价 / 含税金额”）；未匹配的类型按 0 元计入并在结果中提示，可点击“＋ 添加计价规则”补上。</div>
+    <table class="lgRules">
+      <thead><tr><th style="width:220px">产品名称</th><th>匹配关键词</th><th>排除词</th><th>计量方式</th><th>含税单价</th><th style="width:34px"></th></tr></thead>
+      <tbody id="lgRuleRows">
+        <tr>
+          <td><b>PC叠合板</b></td><td class="muted">叠合板</td><td class="muted">桁架</td>
+          <td>体积 m³</td>
+          <td><input type="number" class="rulePrice" id="lgPrice0" value="2300" style="width:92px;"> 元/m³</td><td></td>
+        </tr>
+        <tr>
+          <td><b>PC楼梯</b></td><td class="muted">楼梯</td><td class="muted">—</td>
+          <td>体积 m³</td>
+          <td><input type="number" class="rulePrice" id="lgPrice1" value="2500" style="width:92px;"> 元/m³</td><td></td>
+        </tr>
+        <tr>
+          <td><b>钢管桁架预应力叠合板</b></td><td class="muted">桁架</td><td class="muted">—</td>
+          <td>面积 m²</td>
+          <td><input type="number" class="rulePrice" id="lgPrice2" value="160" style="width:92px;"> 元/m²</td><td></td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="margin-top:6px;"><button id="btnAddRule" class="ghost">＋ 添加计价规则</button></div>
+    <div class="toolbar" style="margin-top:12px;">
+      <button id="btnLedger">生成台账预览</button>
+      <label class="muted">导出文件名
+        <input type="text" id="lgOutName" value="百德·尚谷大院供货明细台账.xlsx" style="width:240px;">
+      </label>
+    </div>
+    <div id="lgResult" style="display:none;">
+      <div id="lgStats"></div>
+      <div id="lgWarn"></div>
+      <div class="lgPageBar">
+        楼栋页：
+        <select id="lgPageSel"></select>
+        <span id="lgPageInfo" class="muted"></span>
+        <button id="btnLedgerExport">⬇ 导出台账 Excel</button>
+      </div>
+      <div id="lgPreviewWrap"></div>
+    </div>
+  </div>
+</main>
+
+<div id="footerTxt">数据完全在本地浏览器中处理，不上传任何文件。用完后直接关闭本页即可。</div>
+
+<script src="xlsx.full.min.js"></script>
+<script src="core.js"></script>
+<script>
+window.__boot = function(){
+'use strict';
+(function(){ try{ var d=document.createElement('div'); d.id='bootmark'; d.textContent='booted'; document.body.appendChild(d); }catch(_){} })();
+/* 诊断：出错时在页面上留痕迹（正常无碍） */
+window.addEventListener('error', function(e){
+  try{ var p=document.createElement('div'); p.id='jserr'; p.style.cssText='position:fixed;left:8px;bottom:8px;background:#7f1d1d;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;z-index:9999;max-width:80%;'; p.textContent='JS出错：'+(e.message||e.type||'unknown'); document.body.appendChild(p); }catch(_){}
+});
+window.addEventListener('unhandledrejection', function(e){
+  try{ var p=document.createElement('div'); p.id='jserr'; p.style.cssText='position:fixed;left:8px;bottom:8px;background:#7f1d1d;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;z-index:9999;max-width:80%;'; p.textContent='JS出错：'+(e.reason && e.reason.message || e.reason || 'promise'); document.body.appendChild(p); }catch(_){}
+});
+var BM = window.BillMerge;
+if(!BM){ alert('核心模块加载失败，请确认 xlsx.full.min.js 与本文件在同一目录。'); return; }
+
+/* ---------- 常量 ---------- */
+var TPL = ['序号','发货时间','构件编号','楼栋','楼层','构件类型','单体质量','单块体积/面积','板宽(mm)','板长(mm)','板厚(mm)','砼标号','备注'];
+
+var state = { books: [], sample: null }; // sample = {fn, sn, ws, headerRow}
+
+var $ = function(id){ return document.getElementById(id); };
+
+/* ---------- DOM 引用 ---------- */
+var drop=$('drop'), fileInput=$('fileInput'), fileList=$('fileList'),
+    cardSheets=$('cardSheets'), sheetList=$('sheetList'), checkCount=$('checkCount'),
+    cardMap=$('cardMap'), mapWrap=$('mapWrap'),
+    btnMerge=$('btnMerge'), resultBox=$('result'), btnExport=$('btnExport');
+
+/* ---------- 文件选择 ---------- */
+drop.addEventListener('click', function(){ fileInput.click(); });
+['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev, function(e){e.preventDefault();drop.classList.add('drag');}); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev, function(e){e.preventDefault();drop.classList.remove('drag');}); });
+drop.addEventListener('drop', function(e){ handleFiles(e.dataTransfer.files); });
+fileInput.addEventListener('change', function(){ handleFiles(fileInput.files); fileInput.value=''; });
+
+/* ---------- 重新开始（清空已加载文件，回到选文件界面） ---------- */
+function resetAll(){
+  if(state.books.length){
+    if(!confirm('确定重新开始？将清空已加载的 '+state.books.length+' 个文件（不会影响已导出的 Excel）。')) return;
+  }
+  state.books=[]; state.sample=null;
+  colOverrides={}; extraCols=[];
+  lastResult=null; window.__lastResult=null;
+  // DOM 复位到初始状态
+  drop.style.display='';
+  fileList.style.display='none';
+  fileList.innerHTML='';
+  sheetList.innerHTML='';
+  mapWrap.innerHTML='';
+  checkCount.textContent='';
+  cardSheets.style.display='none';
+  cardMap.style.display='none';
+  resultBox.style.display='none';
+  cardLedger.style.display='none';
+  ledgerOut=null;
+  if(lgResultBox){ lgResultBox.style.display='none'; }
+  if(lgWarnBox){ lgWarnBox.style.display='none'; }
+  btnExport.disabled=true;
+  $('resStats').innerHTML='';
+  var wb=$('warnBox'); if(wb){ wb.style.display='none'; wb.innerHTML=''; }
+  var tb=$('previewTbl'); if(tb) tb.innerHTML='';
+  window.scrollTo({top:0, behavior:'smooth'});
+  toast('已清空，请重新选择文件');
+}
+$('btnRestart').addEventListener('click', resetAll);
+
+function handleFiles(fl){
+  var arr=[].slice.call(fl).filter(function(f){
+    return /\.xlsx$/i.test(f.name) && !/^~\$/.test(f.name) && !/合并|汇总/.test(f.name);
+  });
+  if(!arr.length){ alert('没有可处理的 .xlsx 文件（已自动排除“合并/汇总”输出文件与临时文件）。'); return; }
+  var todo=arr.length, done=0;
+  arr.forEach(function(f){
+    f.arrayBuffer().then(function(ab){
+      try{
+        var bk = BM.loadWorkbook(new Uint8Array(ab));
+        bk.fileName=f.name;
+        state.books.push(bk);
+        bk.sheets.forEach(function(sh){
+          sh.headerRow = BM.detectHeaderRow(sh.ws);
+          sh.isDelivery = sh.headerRow>0 && BM.hasDeliveryMarkers(sh.ws, sh.headerRow);
+          sh.include = sh.isDelivery;
+          sh.tagLabel = sh.isDelivery ? '发货单/出库单' : '主表/其他';
+        });
+      }catch(err){ console.error(err); alert('读取失败：'+f.name+'（'+err.message+'）'); }
+      finally{
+        done++;
+        if(done===todo) afterLoad();
+      }
+    });
+  });
+}
+
+function afterLoad(){
+  if(!state.books.length){ return; }
+  drop.style.display='none';
+  fileList.style.display='block';
+  renderFiles();
+  pickSample();
+  cardSheets.style.display='block';
+  renderMapping();
+  cardMap.style.display='block';
+}
+
+/* ---------- 步骤2: 文件/工作表清单 ---------- */
+function renderFiles(){
+  fileList.innerHTML='';
+  state.books.forEach(function(bk){
+    var det=document.createElement('details');
+    det.className='fileCard'; det.open=true;
+    var incCnt=bk.sheets.filter(function(s){return s.include;}).length;
+    var sum=document.createElement('summary');
+    sum.innerHTML='<span class="fname">📄 '+esc(bk.fileName)+'</span>';
+    var st=document.createElement('span'); st.className='fstat';
+    st.textContent='已勾 '+incCnt+' / '+bk.sheets.length+' 表';
+    sum.appendChild(st);
+    det.appendChild(sum);
+
+    var wrap=document.createElement('div'); wrap.className='sheetWrap';
+    bk.sheets.forEach(function(sh){
+      var row=document.createElement('div'); row.className='sheetRow';
+      var cb=document.createElement('input'); cb.type='checkbox'; cb.checked=sh.include;
+      cb.addEventListener('change', function(){ sh.include=cb.checked; refreshSheetRow(row,sh,bk); refreshAll(); });
+      row.appendChild(cb);
+
+      var nm=document.createElement('span'); nm.className='sname'; nm.textContent=sh.name; row.appendChild(nm);
+      var tagCls = sh.isDelivery?'delivery':(sh.tagLabel==='主表/其他'?'master':'plain');
+      var tg=document.createElement('span'); tg.className='tag '+tagCls; tg.textContent=sh.tagLabel; row.appendChild(tg);
+
+      var hb=document.createElement('span'); hb.className='hrow';
+      hb.appendChild(document.createTextNode('表头行'));
+      var sel=document.createElement('select');
+      for(var r=1;r<=25;r++){ var o=document.createElement('option'); o.value=r; o.textContent=r; sel.appendChild(o); }
+      sel.value=sh.headerRow||1;
+      sel.addEventListener('change', function(){ sh.headerRow=+sel.value; refreshSheetRow(row,sh,bk); pickSample(); refreshAll(); });
+      hb.appendChild(sel);
+      row.appendChild(hb);
+
+      var pv=document.createElement('button'); pv.className='previewBtn'; pv.textContent='预览';
+      pv.addEventListener('click', function(){ togglePreview(row,sh,bk); });
+      row.appendChild(pv);
+      var mini=document.createElement('div'); mini.className='miniTbl'; row.appendChild(mini);
+      wrap.appendChild(row);
+    });
+    det.appendChild(wrap);
+    fileList.appendChild(det);
+  });
+}
+
+function refreshSheetRow(row,sh,bk){
+  row.className='sheetRow';
+  if(sh.headerRow>0){
+    row.style.opacity= sh.include ? '1' : '.6';
+  }
+  if(sh.include){ row.style.background='#f0f7ff'; } else { row.style.background=''; }
+}
+
+function togglePreview(row, sh, bk){
+  var mini=row.querySelector('.miniTbl');
+  if(mini.style.display==='block'){ mini.style.display='none'; return; }
+  var grid=BM.previewGrid(sh.ws, 12, 16);
+  var html='<table><thead><tr><th></th>';
+  for(var c=0;c<16;c++) html+='<th>'+colL(c)+'</th>';
+  html+='</tr></thead><tbody>';
+  grid.forEach(function(line,ri){
+    var hl = (sh.headerRow && (ri+1)===sh.headerRow) ? ' class="hl"' : '';
+    html+='<tr'+hl+'><td><b>'+ (ri+1) +'</b></td>';
+    line.forEach(function(v,i){ html+='<td>'+esc(String(v).slice(0,40))+'</td>'; });
+    html+='</tr>';
+  });
+  html+='</tbody></table>';
+  mini.innerHTML=html;
+  mini.style.display='block';
+}
+
+function colL(c){ var s=''; c++; while(c>0){ var m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=(c-m-1)/26; } return s; }
+
+function refreshAll(){
+  var n=0;
+  state.books.forEach(function(bk){ bk.sheets.forEach(function(s){ if(s.include) n++; }); });
+  checkCount.textContent='共勾选 '+n+' 张工作表';
+  pickSample();
+  renderMapping();
+}
+
+$('btnUncheckAll').addEventListener('click', function(){ state.books.forEach(function(b){b.sheets.forEach(function(s){s.include=false;});}); renderFiles(); refreshAll(); });
+$('btnCheckDelivery').addEventListener('click', function(){ state.books.forEach(function(b){b.sheets.forEach(function(s){s.include=s.isDelivery;});}); renderFiles(); refreshAll(); });
+$('btnCheckAll').addEventListener('click', function(){ state.books.forEach(function(b){b.sheets.forEach(function(s){s.include=s.headerRow>0;});}); renderFiles(); refreshAll(); });
+
+/* ---------- 样例表 = 第一张勾选的表 ---------- */
+function pickSample(){
+  var found=null;
+  for(var i=0;i<state.books.length && !found;i++){
+    state.books[i].sheets.forEach(function(s){ if(!found && s.include && s.headerRow>0) found=s; });
+  }
+  if(!found && state.books.length && state.books[0].sheets.length){
+    found=state.books[0].sheets[0];
+  }
+  state.sample=found;
+}
+
+/* ---------- 步骤3: 列映射 ---------- */
+var colOverrides={}; // name -> '__auto__' | '__none__' | 'H:'+text
+
+function sampleTexts(){
+  if(!state.sample || !state.sample.headerRow) return [];
+  return BM.headerTexts(state.sample.ws, state.sample.headerRow).filter(function(t){return t && t.length<40;});
+}
+
+function renderMapping(){
+  mapWrap.innerHTML='';
+  if(!state.sample){
+    mapWrap.innerHTML='<div class="muted">（请先在步骤 2 勾选至少一张含明细的工作表，这里会给出列映射建议）</div>';
+    return;
+  }
+  var texts=sampleTexts();
+  var uni=unique(texts);
+  var html='<table class="map"><thead><tr><th style="width:30px">#</th><th>输出列名</th>'+
+    '<th style="width:44%">匹配方式（源表头）</th><th>样例表中自动匹配结果</th></tr></thead><tbody>';
+  TPL.forEach(function(name,i){
+    html+=rowHtml(name, i+1, name==='发货时间', uni);
+  });
+  html+='</tbody></table>';
+  mapWrap.innerHTML=html;
+
+  // 渲染额外的自定义列
+  extraCols.forEach(function(ec){ appendExtraRow(ec); });
+
+  // 事件：日期行特殊处理
+  var dateSel=$('dateSel'); if(dateSel) dateSel.addEventListener('change', onDateMode);
+  updateStatus();
+}
+
+function rowHtml(name, num, isDate, uni){
+  var opt = colOverrides[name] || '__auto__';
+  var sels='';
+  if(isDate){
+    sels='<select id="dateSel" class="dateSel" style="min-width:230px">';
+    sels+='<option value="__auto__">自动识别（标题行日期 / 打印时间）</option>';
+    sels+='<option value="__fixed__">指定统一日期（手动填）</option>';
+    uni.forEach(function(t){ sels+='<option value="H:'+t+'">逐行取源列：「'+esc(t)+'」</option>'; });
+    sels+='</select>';
+    sels+=' <input type="date" id="dateFixed" style="display:none">';
+    return '<tr data-name="'+name+'"><td class="num">'+num+'</td><td><b>'+esc(name)+'</b><div class="muted">日期类型：每张表用同一发货日期</div></td><td>'+sels+'</td><td id="st_'+name+'"></td></tr>';
+  }
+  sels='<select class="mapSel" data-name="'+name+'" style="width:100%;max-width:380px">';
+  sels+='<option value="__auto__">✔ 自动匹配（按语义找同名列）</option>';
+  sels+='<option value="__none__">✘ 不输出本列</option>';
+  if(uni.length) sels+='<optgroup label="手动指定源列">';
+  uni.forEach(function(t){ sels+='<option value="H:'+t+'">用源列：「'+esc(t)+'」</option>'; });
+  if(uni.length) sels+='</optgroup>';
+  sels+='</select>';
+  return '<tr data-name="'+name+'"><td class="num">'+num+'</td><td><b>'+esc(name)+'</b></td><td>'+sels+'</td><td id="st_'+name+'"></td></tr>';
+}
+
+var extraCols=[]; // {name, mode:'auto'|'H:...'|'__none__'}
+function appendExtraRow(ec){
+  var texts=sampleTexts(); var uni=unique(texts);
+  var tr=document.createElement('tr'); tr.className='extraRow';
+  var nameTd=document.createElement('td');
+  nameTd.innerHTML='<input type="text" class="extraName" value="'+esc(ec.name||'')+'" placeholder="输出列名">';
+  var selTd=document.createElement('td');
+  var sel=document.createElement('select'); sel.className='extraSel';
+  var o=document.createElement('option'); o.value='__auto__'; o.textContent='✔ 自动匹配';
+  sel.appendChild(o);
+  uni.forEach(function(t){ var x=document.createElement('option'); x.value='H:'+t; x.textContent='用源列：「'+t+'」'; sel.appendChild(x); });
+  sel.value=ec.mode||'__auto__';
+  selTd.appendChild(sel);
+  var delTd=document.createElement('td');
+  var delBtn=document.createElement('button'); delBtn.className='delExtra'; delBtn.title='删除'; delBtn.textContent='✕';
+  delBtn.addEventListener('click', function(){ tr.remove(); extraCols.splice(extraCols.indexOf(ec),1); renderMapping(); });
+  delTd.appendChild(delBtn);
+  tr.appendChild(nameTd); tr.appendChild(selTd); tr.appendChild(delTd);
+  mapWrap.querySelector('table.map tbody').appendChild(tr);
+  sel.addEventListener('change', function(){ ec.mode=sel.value; });
+  nameTd.querySelector('input').addEventListener('input', function(){ ec.name=this.value; });
+}
+
+$('btnAddCol').addEventListener('click', function(){
+  var ec={name:'', mode:'__auto__'}; extraCols.push(ec); appendExtraRow(ec);
+});
+$('btnResetMap').addEventListener('click', function(){
+  colOverrides={}; extraCols=[];
+  var ds=$('dateSel'); if(ds) ds.value='__auto__'; onDateMode();
+  renderMapping();
+});
+
+function onDateMode(){
+  var sel=$('dateSel'); if(!sel) return;
+  var fx=$('dateFixed');
+  fx.style.display = sel.value==='__fixed__' ? 'inline-block' : 'none';
+}
+
+/* 映射选择变化 */
+mapWrap.addEventListener('change', function(e){
+  if(e.target.classList && e.target.classList.contains('mapSel')){
+    colOverrides[e.target.getAttribute('data-name')]=e.target.value;
+    updateStatus();
+  }
+});
+
+/* 状态列：展示“自动匹配”在样例表里找到了哪一列 */
+function updateStatus(){
+  if(!state.sample || !state.sample.headerRow){ return; }
+  var names=TPL.filter(function(n){ return (colOverrides[n]||'__auto__')==='__auto__' && n!=='发货时间'; });
+  var map=BM.mapColumns(state.sample.ws, state.sample.headerRow, names);
+  names.forEach(function(n){
+    var td=$('st_'+n); if(!td) return;
+    var m=map[n];
+    if(m){ td.innerHTML='<span class="ok">✔ 自动匹配到「'+esc(m.text)+'」</span>'; }
+    else { td.innerHTML='<span class="no">✘ 未自动找到 → 请手动指定或勾“不输出”</span>'; }
+  });
+  // 发货时间
+  var dst=$('st_发货时间'); if(dst){
+    var auto=BM.parseSheetDate(state.sample.ws);
+    dst.innerHTML= auto ? '<span class="ok">✔ 样例表可识别到 '+esc(auto)+'</span>'
+                        : '<span class="warnc">⚠ 样例表未识别到日期，可手动指定</span>';
+  }
+}
+
+/* ---------- 读取界面状态 → merge config ---------- */
+function buildConfig(){
+  var cols=[];
+  // 固定模板列
+  TPL.forEach(function(name){
+    var mode=colOverrides[name]||'__auto__';
+    if(name==='发货时间'){ cols.push({name:'发货时间', enabled:true, date:readDateMode()}); return; }
+    if(mode==='__none__'){ cols.push({name:name, enabled:false}); return; }
+    var m={name:name, enabled:true};
+    if(mode.indexOf('H:')===0) m.matchHeader=mode.slice(2);
+    cols.push(m);
+  });
+  // 自定义列
+  extraCols.forEach(function(ec){
+    var nm=(ec.name||'').trim();
+    if(!nm) return;
+    var mode=ec.mode||'__auto__';
+    if(mode==='__none__') return;
+    var m={name:nm, enabled:true};
+    if(mode.indexOf('H:')===0) m.matchHeader=mode.slice(2);
+    cols.push(m);
+  });
+  var sheets={};
+  state.books.forEach(function(bk){
+    sheets[bk.fileName]={};
+    bk.sheets.forEach(function(sh){
+      sheets[bk.fileName][sh.name]={ include:sh.include, headerRow:sh.headerRow };
+    });
+  });
+  var files=state.books.map(function(b){ return {name:b.fileName, wb:b.wb}; });
+  return { files:files, sheets:sheets, cols:cols };
+}
+
+function readDateMode(){
+  var sel=$('dateSel'); if(!sel) return {mode:'auto', fixed:'', col:''};
+  var v=sel.value;
+  if(v==='__fixed__') return {mode:'fixed', fixed:($('dateFixed').value||''), col:''};
+  if(v.indexOf('H:')===0) return {mode:'col', col:v.slice(2), fixed:''};
+  return {mode:'auto', fixed:'', col:''};
+}
+
+/* ---------- 合并 & 导出 ---------- */
+var lastResult=null;
+
+btnMerge.addEventListener('click', function(){
+  var included=0;
+  state.books.forEach(function(b){ b.sheets.forEach(function(s){ if(s.include) included++; }); });
+  if(!included){ alert('请先在步骤 2 勾选要合并的工作表。'); return; }
+  var cfg=buildConfig();
+  var out=BM.merge(cfg);
+  lastResult=out;
+  window.__lastResult=out;      // 诊断/自动化测试用，正常使用无影响
+  resultBox.style.display='block';
+  // 合并成功 → 显示步骤5 台账面板，并清掉上一次的台账预览(需重新生成)
+  cardLedger.style.display='block';
+  ledgerOut=null;
+  lgResultBox.style.display='none';
+  lgWarnBox.style.display='none';
+  // stats
+  var html='';
+  html+='<div><div class="big">'+out.rows.length+'</div><div class="lab">总明细行数</div></div>';
+  Object.keys(out.stats).forEach(function(fn){
+    html+='<div><div class="big" style="font-size:18px">'+out.stats[fn]+'</div><div class="lab">'+esc(fn)+'</div></div>';
+  });
+  $('resStats').innerHTML=html;
+  // warnings
+  var wb=$('warnBox');
+  if(out.warnings.length){
+    wb.style.display='block';
+    wb.innerHTML='<b>⚠ 提示（'+out.warnings.length+' 条，多为“该表本来就没有这一列”，可忽略）：</b><br>'+
+      out.warnings.slice(0,80).map(function(w){return '· '+esc(w);}).join('<br>');
+  } else wb.style.display='none';
+  // preview
+  var tb=$('previewTbl'); tb.innerHTML='';
+  var tr=document.createElement('tr');
+  out.headers.forEach(function(h){ var th=document.createElement('th'); th.textContent=h; tr.appendChild(th); });
+  tb.appendChild(tr);
+  out.rows.slice(0,20).forEach(function(row){
+    var r2=document.createElement('tr');
+    row.forEach(function(v){
+      var td=document.createElement('td'); td.textContent= v==='' ? '' : String(v).slice(0,80); r2.appendChild(td);
+    });
+    tb.appendChild(r2);
+  });
+  btnExport.disabled=false;
+});
+
+btnExport.addEventListener('click', function(){
+  if(!lastResult) return;
+  var name=($('outName').value||'发货明细汇总.xlsx').trim();
+  if(!/\.xlsx$/i.test(name)) name+='.xlsx';
+  var wb=BM.exportWorkbook(lastResult.rows, lastResult.headers, '发货明细汇总');
+  try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
+  catch(e){ alert('导出失败：'+e.message); }
+});
+
+$('btnAgain').addEventListener('click', function(){ resultBox.style.display='none'; cardLedger.style.display='none'; ledgerOut=null; if(lgResultBox) lgResultBox.style.display='none'; });
+
+/* ================= 步骤5: 由合并结果生成台账 ================= */
+var cardLedger=$('cardLedger'), lgResultBox=$('lgResult'), lgWarnBox=$('lgWarn'),
+    lgStatsBox=$('lgStats'), lgPageSel=$('lgPageSel'), lgPreviewWrap=$('lgPreviewWrap');
+var ledgerOut=null;      // {pages, warnings}
+var extraRules=[];       // 用户自定义计价规则 {label,kw[],exclude[],unit,price}
+
+$('lgSeg').addEventListener('change', function(){
+  $('cutDayWrap').style.display = $('lgSeg').value==='cutday' ? '' : 'none';
+});
+
+/* 添加自定义计价规则 */
+$('btnAddRule').addEventListener('click', function(){
+  var rule={label:'', kwText:'', excludeText:'', unit:'体积', price:0};
+  var tr=document.createElement('tr');
+  tr.innerHTML='<td><input type="text" class="rName" placeholder="产品名称" style="width:170px;"></td>'+
+    '<td><input type="text" class="rKw" placeholder="如：叠合板（逗号分隔）" style="width:160px;"></td>'+
+    '<td><input type="text" class="rEx" placeholder="排除词(可空)" style="width:120px;"></td>'+
+    '<td><select class="rUnit"><option value="体积">体积 m³</option><option value="面积">面积 m²</option></select></td>'+
+    '<td><input type="number" class="rPrice" value="0" style="width:92px;"> 元</td>'+
+    '<td><button class="ruleDel" title="删除">✕</button></td>';
+  $('lgRuleRows').appendChild(tr);
+  function sync(){ rule.label=tr.querySelector('.rName').value.trim();
+    rule.kwText=tr.querySelector('.rKw').value;
+    rule.excludeText=tr.querySelector('.rEx').value;
+    rule.unit=tr.querySelector('.rUnit').value;
+    rule.price=parseFloat(tr.querySelector('.rPrice').value)||0; }
+  tr.querySelectorAll('input,select').forEach(function(el){ el.addEventListener('input', sync); });
+  tr.querySelector('.ruleDel').addEventListener('click', function(){
+    tr.remove(); extraRules.splice(extraRules.indexOf(rule),1);
+  });
+  extraRules.push(rule);
+  sync();
+});
+
+/* 从合并结果构造 buildLedger 输入行 */
+function buildLedgerRowsFromResult(){
+  var H={};
+  lastResult.headers.forEach(function(h,i){ H[BM.clean(h)]=i; });
+  function I(n){ return (n in H)? H[n] : -1; }
+  var iCode=I('构件编号'), iBld=I('楼栋'), iFl=I('楼层'), iType=I('构件类型'),
+      iD=(I('发货时间')>=0? I('发货时间') : I('发货日期')),
+      iVA=I('单块体积/面积'),  // 体积与面积合并为一列；按构件类型决定走体积还是面积
+      iW=I('板宽(mm)'), iL=I('板长(mm)'), iH=I('板厚(mm)');
+  function g(r,i){ return (i>=0 && i<r.length) ? r[i] : ''; }
+  function shiftD(d,o){
+    if(!o) return d;
+    var p=d.split('-'); var dt=new Date(+p[0], +p[1]-1, +p[2]+o);
+    return dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2);
+  }
+  var off=parseInt($('lgDayOff').value,10)||0;
+  var fromV=$('lgFrom').value, toV=$('lgTo').value;
+  var rows=[];
+  lastResult.rows.forEach(function(r){
+    var code=BM.clean(g(r,iCode)), type=BM.clean(g(r,iType)), bld=BM.clean(g(r,iBld));
+    if(!code && !type && !bld) return;                    // 空白行
+    var d=BM.toDateText(g(r,iD));
+    if(!d && !code && !type) return;                      // 连日期都没有的占位行
+    if(d && off) d=shiftD(d,off);
+    if(d && fromV && d<fromV) return;
+    if(d && toV && d>toV) return;
+    var va=parseFloat(g(r,iVA));
+    rows.push({
+      d:d, bld:g(r,iBld), fl:g(r,iFl), type:g(r,iType), code:g(r,iCode),
+      w:parseFloat(g(r,iW)), l:parseFloat(g(r,iL)), h:parseFloat(g(r,iH)),
+      vol:va, area:va  // 同源: 按 priceRule.unit 选 vol 或 area
+    });
+  });
+  return rows;
+}
+
+function collectPriceRules(){
+  var p=function(id){ var v=parseFloat($(id).value); return isNaN(v)?0:v; };
+  var rules=[
+    {label:'PC叠合板', kw:['叠合板'], exclude:['桁架'], unit:'体积', price:p('lgPrice0')},
+    {label:'PC楼梯',   kw:['楼梯'],   exclude:[],        unit:'体积', price:p('lgPrice1')},
+    {label:'钢管桁架预应力叠合板', kw:['桁架'], exclude:[], unit:'面积', price:p('lgPrice2')}
+  ];
+  extraRules.forEach(function(r){
+    if(!r || !r.label) return;
+    rules.push({
+      label:r.label,
+      kw:(r.kwText||'').split(/[,，]/).map(function(s){return s.trim();}).filter(Boolean),
+      exclude:(r.excludeText||'').split(/[,，]/).map(function(s){return s.trim();}).filter(Boolean),
+      unit:r.unit, price:r.price
+    });
+  });
+  return rules;
+}
+
+function doLedger(){
+  if(!lastResult || !lastResult.rows || !lastResult.rows.length){
+    alert('请先在步骤 4 点击“合并并预览”，得到合并数据后再生成台账。'); return;
+  }
+  var rows=buildLedgerRowsFromResult();
+  var segMode=$('lgSeg').value;
+  var segment={mode:segMode};
+  if(segMode==='cutday') segment.cutDay=parseInt($('lgCutDay').value,10)||26;
+  var title=($('lgTitle').value||'').trim()||'预制构件供货明细';
+  var out=BM.buildLedger(rows, { title:title, priceRules:collectPriceRules(), segment:segment });
+  ledgerOut=out;
+  lgResultBox.style.display='block';
+  // 统计
+  var sumAmt=0, sumData=0, nPages=out.pages.length;
+  out.pages.forEach(function(pg){ sumAmt+=pg.amount||0; pg.mark.forEach(function(m){ if(m.kind==='data') sumData++; }); });
+  lgStatsBox.innerHTML=
+    '<div><div class="big">'+nPages+'</div><div class="lab">楼栋页</div></div>'+
+    '<div><div class="big">'+sumData+'</div><div class="lab">构件明细行</div></div>'+
+    '<div><div class="big">'+fmtMoney(sumAmt)+'</div><div class="lab">合计含税金额(¥)</div></div>'+
+    '<div><div class="big">'+rows.length+'</div><div class="lab">参与计算行</div></div>';
+  // 警告
+  if(out.warnings && out.warnings.length){
+    lgWarnBox.style.display='block';
+    lgWarnBox.innerHTML='<b>⚠ 提示（'+out.warnings.length+' 条）：</b><br>'+
+      out.warnings.slice(0,60).map(function(w){return '· '+esc(w);}).join('<br>')+
+      (out.warnings.length>60?'<br>…（其余已省略）':'');
+  } else lgWarnBox.style.display='none';
+  // 页选择器
+  lgPageSel.innerHTML='';
+  out.pages.forEach(function(pg,i){
+    var o=document.createElement('option'); o.value=i;
+    o.textContent=pg.name+'（¥'+fmtMoney(pg.amount)+'）';
+    lgPageSel.appendChild(o);
+  });
+  lgPageSel.onchange=function(){ renderLedgerPage(+lgPageSel.value); };
+  renderLedgerPage(0);
+}
+
+function renderLedgerPage(pi){
+  var pg=ledgerOut.pages[pi]; if(!pg) return;
+  var dataCnt=0; pg.mark.forEach(function(m){ if(m.kind==='data') dataCnt++; });
+  lgPageInfo.textContent='共 '+pg.aoa.length+' 行（含标题/合计），构件明细 '+dataCnt+' 行，合计 ¥'+fmtMoney(pg.amount);
+  var HEAD=['日期','产品名称','构件编号','规格型号','楼栋','楼层','单块体积/面积','含税单价','含税金额'];
+  var h='<table class="lgTbl"><thead><tr>';
+  HEAD.forEach(function(x){ h+='<th>'+esc(x)+'</th>'; });
+  h+='</tr></thead><tbody>';
+  var kindCls={title:'k-title',segname:'k-segname',hdr:'k-hdr',data:'k-data',sub:'k-sub',segsum:'k-segsum',total:'k-total'};
+  pg.aoa.forEach(function(row,i){
+    var m=pg.mark[i]||{};
+    var cls=kindCls[m.kind]||'';
+    var label=String(m.label||'');
+    if(m.kind==='sub' || m.kind==='segsum' || m.kind==='total') label=''; // 行首已是“小计：”文本
+    h+='<tr class="'+cls+'">';
+    row.forEach(function(v,ci){
+      var txt = (v instanceof Date) ? BM.toDateText(v) : String(v==null?'':v);
+      h+='<td class="'+(ci>=6?'num':'')+'">'+esc(txt)+'</td>';
+    });
+    h+='</tr>';
+  });
+  h+='</tbody></table>';
+  lgPreviewWrap.innerHTML=h;
+}
+
+function fmtMoney(x){
+  x=Math.round((x||0)*100)/100;
+  var s=x.toFixed(2);
+  var neg=s.indexOf('-')===0; if(neg) s=s.slice(1);
+  var parts=s.split('.'); parts[0]=parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  return (neg?'-':'')+parts.join('.');
+}
+
+$('btnLedger').addEventListener('click', doLedger);
+$('btnLedgerExport').addEventListener('click', function(){
+  if(!ledgerOut || !ledgerOut.pages.length){ alert('请先生成台账预览。'); return; }
+  var name=($('lgOutName').value||'供货明细台账.xlsx').trim();
+  if(!/\.xlsx$/i.test(name)) name+='.xlsx';
+  var wb=BM.exportLedgerWorkbook(ledgerOut.pages);
+  try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
+  catch(e){ alert('导出失败：'+e.message); }
+});
+
+/* ---------- 工具函数 ---------- */
+function unique(arr){ var seen={}; return arr.filter(function(x){ if(seen[x])return false; seen[x]=1; return true; }); }
+function esc(s){ return String(s).replace(/[&<>"]/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]; }); }
+var toastTimer;
+function toast(msg){
+  var d=document.createElement('div');
+  d.style.cssText='position:fixed;right:22px;top:18px;background:#0f172a;color:#fff;padding:10px 16px;'+
+    'border-radius:8px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.2);z-index:999;';
+  d.textContent=msg;
+  document.body.appendChild(d);
+  setTimeout(function(){ d.remove(); }, 2600);
+}
+
+/* 自检钩子：网址后加 ?demo=1 时自动加载同目录 demo.xlsx 演示全流程（正常使用不受影响） */
+if(location.search.indexOf('demo=1') >= 0){
+  var dbg=function(t){ try{ var d=document.createElement('div'); d.style.cssText='position:fixed;right:8px;bottom:8px;background:#111;color:#ffd;padding:4px 8px;font:11px monospace;z-index:99999;'; d.textContent=t; document.body.appendChild(d); }catch(_){} };
+  dbg('demo:fetch start');
+  fetch('demo.xlsx').then(function(r){ dbg('demo:status '+r.status); return r.arrayBuffer(); }).then(function(ab){
+    dbg('demo:bytes '+ab.byteLength);
+    handleFiles([{ name:'demo.xlsx', arrayBuffer: function(){ return Promise.resolve(ab); } }]);
+  }).catch(function(e){ dbg('demo:error '+(e && e.message)); });
+}
+
+};
+
+/* 启动器：等本地解析库/核心库就绪；本地库缺失时自动从 CDN 兜底(需联网) */
+(function(){
+  var tries=0;
+  function hasLib(){ return !!(window.XLSX && window.BillMerge); }
+  function poll(){
+    if(hasLib()){
+      try{ window.__boot(); }
+      catch(e){ console.error(e); alert('启动出错：'+e.message); }
+      return;
+    }
+    if(tries===2){
+      var s=document.createElement('script');
+      s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+      s.onload=function(){ tries=99; poll(); };
+      s.onerror=function(){ alert('解析库加载失败：请确认本工具目录完整（含 xlsx.full.min.js）。'); };
+      document.head.appendChild(s);
+    }
+    tries++;
+    setTimeout(poll, 120);
+  }
+  poll();
+})();
+</script>
+</body>
+</html>
