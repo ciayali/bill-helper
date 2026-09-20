@@ -380,6 +380,7 @@
           var kt = String(kv).trim();
           if (!kt) continue;
           if (/合计|总计|小计|SUM/i.test(kt)) continue;      // 汇总行
+          if (/^(司机|驾驶员|送货人|收货人|签收单位|签收人|打印人|制单人|质检员?|验收人)/.test(kt)) continue; // 签收留尾行
           var out = [];
           for (var hi = 0; hi < headers.length; hi++) {
             var hname = headers[hi];
