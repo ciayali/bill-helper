@@ -169,7 +169,7 @@
     <h2><span class="step-tag">4</span>合并 & 导出</h2>
     <div class="toolbar">
       <button id="btnMerge">合并并预览</button>
-      <label class="muted">导出文件名
+      <label class="muted">导出文件名<small>（默认跟随导入文件名，可修改）</small>
         <input type="text" id="outName" value="发货明细汇总.xlsx" style="width:190px;">
       </label>
     </div>
@@ -298,6 +298,10 @@ function resetAll(){
   state.books=[]; state.sample=null;
   colOverrides={}; extraCols=[];
   lastResult=null; window.__lastResult=null;
+  // 导出文件名恢复为通用默认（文件清空后不再有可跟随的导入名）
+  if($('outName')) $('outName').value=DEF_OUT_MERGED;
+  if($('lgOutName')) $('lgOutName').value=DEF_OUT_LEDGER;
+  autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER };
   // DOM 复位到初始状态
   drop.style.display='';
   fileList.style.display='none';
@@ -357,6 +361,40 @@ function afterLoad(){
   cardSheets.style.display='block';
   renderMapping();
   cardMap.style.display='block';
+  autoOutNames();
+}
+
+/* ---------- 导出文件名默认跟随导入文件命名 ---------- */
+var DEF_OUT_MERGED='发货明细汇总.xlsx', DEF_OUT_LEDGER='百德·尚谷大院供货明细台账.xlsx';
+var autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER };  // 最近一次自动填充的值
+/* 从已导入文件名推一个公共基名：
+   单文件=去掉 .xlsx 的文件名；多文件=最长公共前缀（去掉尾部分隔符/编号），推不出则返回 '' */
+function importBaseName(){
+  var names=state.books.map(function(b){ return (b.fileName||'').replace(/\.xlsx$/i,''); }).filter(Boolean);
+  if(!names.length) return '';
+  if(names.length===1) return names[0];
+  var pre=names[0];
+  for(var i=1;i<names.length && pre;i++){
+    var s=names[i], j=0;
+    while(j<pre.length && j<s.length && pre.charAt(j)===s.charAt(j)) j++;
+    pre=pre.slice(0,j);
+  }
+  pre=pre.replace(/[\s#\-—－,，、.·()（）0-9]+$/,'');
+  return pre.length>=2 ? pre : '';
+}
+function autoOutNames(){
+  var base=importBaseName();
+  var m=base ? base+'-合并明细.xlsx'     : DEF_OUT_MERGED;
+  var l=base ? base+'-供货明细台账.xlsx' : DEF_OUT_LEDGER;
+  [ ['outName',m,'m'], ['lgOutName',l,'l'] ].forEach(function(it){
+    var el=$(it[0]); if(!el) return;
+    var v=el.value.trim();
+    // 当前值仍是默认值或上次自动值（=用户没手改过）才更新，避免覆盖用户输入
+    if(!v || v===DEF_OUT_MERGED || v===DEF_OUT_LEDGER || v===autoLast[it[2]]){
+      el.value=it[1];
+    }
+  });
+  autoLast={ m:m, l:l };
 }
 
 /* ---------- 步骤2: 文件/工作表清单 ---------- */
@@ -664,7 +702,7 @@ btnMerge.addEventListener('click', function(){
 
 btnExport.addEventListener('click', function(){
   if(!lastResult) return;
-  var name=($('outName').value||'发货明细汇总.xlsx').trim();
+  var name=($('outName').value||DEF_OUT_MERGED).trim();
   if(!/\.xlsx$/i.test(name)) name+='.xlsx';
   var wb=BM.exportWorkbook(lastResult.rows, lastResult.headers, '发货明细汇总');
   try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
