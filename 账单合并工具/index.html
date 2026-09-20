@@ -186,7 +186,7 @@
   </div>
   <!-- 步骤5: 由合并结果生成台账 -->
   <div class="card" id="cardLedger" style="display:none;">
-    <h2><span class="step-tag">5</span>由合并结果生成“供货明细台账”<small>按楼栋分页，叠合板/楼梯/桁架板自动计价；同一天同类构件合并一个小计</small></h2>
+    <h2><span class="step-tag">5</span>由合并结果生成“供货明细台账”<small>按楼栋分页，叠合板/楼梯/桁架板自动计价；同一天同类构件合并一个小计；楼栋为空的明细归入「未填楼栋」页</small></h2>
     <div class="lgGrid">
       <label class="lgItem">台账标题
         <input type="text" id="lgTitle" value="百德·尚谷大院预制构件供货明细" style="width:330px;">
@@ -773,6 +773,18 @@ function doLedger(){
   var title=($('lgTitle').value||'').trim()||'预制构件供货明细';
   var out=BM.buildLedger(rows, { title:title, priceRules:collectPriceRules(), segment:segment });
   ledgerOut=out;
+  if(!out.pages.length){
+    lgResultBox.style.display='block';
+    lgStatsBox.innerHTML='';
+    lgWarnBox.style.display='block';
+    lgWarnBox.innerHTML='<b>⚠ 无法生成台账：</b><br>· 合并结果中没有可用明细行。'+
+      (out.warnings&&out.warnings.length
+        ? '原因：<br>'+out.warnings.slice(0,30).map(function(w){return '&nbsp;&nbsp;· '+esc(w);}).join('<br>')
+        : '请检查步骤 3 的列映射（构件编号/构件类型/体积面积等）后重新合并。');
+    lgPageSel.innerHTML=''; lgPreviewWrap.innerHTML='';
+    var pi0=$('lgPageInfo'); if(pi0) pi0.textContent='';
+    return;
+  }
   lgResultBox.style.display='block';
   // 统计
   var sumAmt=0, sumData=0, nPages=out.pages.length;

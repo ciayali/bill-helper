@@ -422,11 +422,13 @@
    * priceRules: [{label, kw[], exclude[], unit:'体积'|'面积', price}] 按顺序首中即用；
    *   规则顺序同时决定同一天内小计块的排列顺序
    * 小计块口径 = (页楼栋 + 发货日期 + 产品名)合并一块，尾部跟“小计：”
+   * 楼栋为空的明细不丢弃，归入 opts.blankBldLabel（默认「未填楼栋」）页
    * 返回 { pages:[{name, aoa, mark, amount}], warnings:[...] }
    */
   function buildLedger(dataRows, opts) {
     opts = opts || {};
     var title = opts.title || '预制构件供货明细';
+    var blankBld = opts.blankBldLabel || '未填楼栋';   // 楼栋为空的明细归入该页，不再丢弃
     var rules = opts.priceRules && opts.priceRules.length ? opts.priceRules
       : [{ label: 'PC叠合板', kw: ['叠合板'], exclude: ['桁架'], unit: '体积', price: 2300 },
          { label: 'PC楼梯', kw: ['楼梯'], exclude: [], unit: '体积', price: 2500 },
@@ -451,8 +453,9 @@
 
     var recs = [];
     dataRows.forEach(function (r) {
-      var bld = clean(r.bld);
-      if (!bld) { warnings.push('明细缺少楼栋（' + (r.code || '?') + '），已跳过该行'); return; }
+      var bldRaw = clean(r.bld);
+      var bld = bldRaw || blankBld;
+      if (!bldRaw) warnings.push('明细缺少楼栋（' + (r.code || '?') + '），已归入「' + blankBld + '」页');
       var type = clean(r.type);
       var rule = null, ruleIdx = 1e9, ri, k;
       for (ri = 0; ri < rules.length; ri++) {
@@ -475,7 +478,7 @@
         warnings.push('构件缺少' + (rule.unit === '面积' ? '面积' : '体积') + '：' + rule.label + ' ' + (r.code || '') + '（' + bld + '），金额留空');
       }
       recs.push({
-        c: r.c || 0, d: r.d || '', bld: bld, fl: clean(r.fl), li: ruleIdx,
+        c: r.c || 0, d: r.d || '', bld: bld, bldRaw: bldRaw, fl: clean(r.fl), li: ruleIdx,
         label: rule.label, price: rule.price, unit: rule.unit,
         code: String(r.code == null ? '' : r.code).trim(), spec: spec,
         qty: qty === '' ? '' : qty,
@@ -546,7 +549,7 @@
         sg.cars.forEach(function (car) {
           var carSum = 0;
           car.rows.forEach(function (r) {
-            aoa.push([r.d, r.label, r.code, r.spec, r.bld, r.fl, r.qty, r.price, r.amt]);
+            aoa.push([r.d, r.label, r.code, r.spec, r.bldRaw || '', r.fl, r.qty, r.price, r.amt]);
             mark.push({ r: aoa.length - 1, label: r.code, kind: 'data' });
             carSum += (typeof r.amt === 'number' ? r.amt : 0);
           });
