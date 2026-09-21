@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 v1.4.0 · 本地离线版</title>
+<title>账单合并工具 v1.4.1 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -146,7 +146,7 @@
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.4.0</b></span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.4.1</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
@@ -1033,6 +1033,10 @@ async function attachOriginalSheets(mainBuf, cfg){
   if(!entries.length) return mainBuf;
   var outWb=new ExcelJS.Workbook();
   await outWb.xlsx.load(mainBuf);
+  // 打开时强制重算：ExcelJS 对「字符串型」公式结果（如标题 ="…"&TEXT(...)）可能丢缓存，
+  // 不加这个标记，用 Excel/WPS 打开会显示 0 或空白。注意必须写在 load() 之后 ——
+  // load() 会用文件里的 calcPr 覆盖掉这里的设置。
+  try{ outWb.calcProperties.fullCalcOnLoad=true; }catch(_){}
   var used={}; outWb.worksheets.forEach(function(w){ used[w.name]=1; });
   var byFile={};
   entries.forEach(function(e){ (byFile[e.file]=byFile[e.file]||[]).push(e); });
