@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 v1.3.0 · 本地离线版</title>
+<title>账单合并工具 v1.3.1 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -146,7 +146,7 @@
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.3.0</b></span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.3.1</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
@@ -201,7 +201,7 @@
         <input type="text" id="outName" value="发货明细汇总.xlsx" style="width:190px;">
       </label>
       <label class="muted" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="勾选后，导出的工作簿会附上所有已勾选原始货单（每张单一个工作表）">
-        <input type="checkbox" class="srcAttach" checked> 附带原始货单
+        <input type="checkbox" class="srcAttach" checked> 附带原始货单（原格式含公式）
       </label>
     </div>
     <div id="result">
@@ -279,7 +279,7 @@
         <span id="lgPageInfo" class="muted"></span>
         <button id="btnLedgerExport">⬇ 导出台账 Excel</button>
         <label class="muted" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="勾选后，导出的工作簿会附上所有已勾选原始货单（每张单一个工作表）">
-          <input type="checkbox" class="srcAttach" checked> 附带原始货单
+          <input type="checkbox" class="srcAttach" checked> 附带原始货单（原格式含公式）
         </label>
       </div>
       <div id="lgPreviewWrap"></div>
@@ -316,7 +316,7 @@
       <div class="toolbar" style="margin-top:10px;">
         <button id="btnSumExport">⬇ 导出汇总 Excel</button>
         <label class="muted" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="勾选后，导出的工作簿会附上所有已勾选原始货单（每张单一个工作表）">
-          <input type="checkbox" class="srcAttach" checked> 附带原始货单
+          <input type="checkbox" class="srcAttach" checked> 附带原始货单（原格式含公式）
         </label>
       </div>
     </div>
@@ -326,6 +326,7 @@
 <div id="footerTxt">数据完全在本地浏览器中处理，不上传任何文件。用完后直接关闭本页即可。</div>
 
 <script src="xlsx.full.min.js"></script>
+<script src="exceljs.min.js"></script>
 <script src="core.js"></script>
 <script>
 window.__boot = function(){
@@ -345,6 +346,8 @@ if(!BM){ alert('核心模块加载失败，请确认 xlsx.full.min.js 与本文�
 var TPL = ['序号','发货时间','构件编号','楼栋','楼层','构件类型','单体质量','单块体积/面积','板宽(mm)','板长(mm)','板厚(mm)','砼标号','备注'];
 
 var state = { books: [], sample: null }; // sample = {fn, sn, ws, headerRow}
+/* 诊断/自动化测试钩子（正常使用无影响；函数声明有提升，此处可直接引用） */
+window.__testHooks = { state: state, handleFiles: handleFiles, buildConfig: buildConfig, exportWithAttach: exportWithAttach };
 
 var $ = function(id){ return document.getElementById(id); };
 
@@ -478,6 +481,12 @@ function handleFiles(fl){
       try{
         var bk = BM.loadWorkbook(new Uint8Array(ab));
         bk.fileName=f.name;
+        // 保留原始字节：导出附带原始货单时按原格式整表复制。
+        // 复制成新的 ArrayBuffer（避免跨环境/跨 realm 的类型识别问题）。
+        try{
+          var u8=new Uint8Array(ab), cp=new Uint8Array(u8.length); cp.set(u8);
+          bk.raw=cp.buffer;
+        }catch(_){ bk.raw=ab; }
         state.books.push(bk);
         bk.sheets.forEach(function(sh){
           sh.headerRow = BM.detectHeaderRow(sh.ws);
@@ -799,7 +808,7 @@ function buildConfig(){
       sheets[bk.fileName][sh.name]={ include:sh.include, headerRow:sh.headerRow };
     });
   });
-  var files=state.books.map(function(b){ return {name:b.fileName, wb:b.wb}; });
+  var files=state.books.map(function(b){ return {name:b.fileName, wb:b.wb, buf:b.raw}; });
   return { files:files, sheets:sheets, cols:cols };
 }
 
@@ -873,7 +882,12 @@ btnMerge.addEventListener('click', function(){
   btnExport.disabled=false;
 });
 
-/* ---------- 导出时附带原始货单（每张已勾选的原始单 = 一个工作表） ---------- */
+/* ---------- 导出时附带原始货单 ----------
+ * v1.3.1：不再把原始单转成纯数据，而是用 ExcelJS 把每张已勾选的原始单
+ * 按原格式整表复制进导出工作簿（字体/边框/填充/数字格式/合并单元格/
+ * 列宽/行高/冻结窗格/计算公式全部保留），即“把所有表格合并到一个工作簿”。
+ * ExcelJS 缺失或复制失败时，自动退回纯数据附加方式并提示，不会导致导出失败。
+ */
 function wantAttach(){
   var boxes=document.querySelectorAll('input.srcAttach');
   for(var i=0;i<boxes.length;i++){ if(boxes[i].checked) return true; }
@@ -894,14 +908,112 @@ function appendSourceSheets(wb, cfg){
   return wb;
 }
 
+/* 整表复制：值 / 公式（含结果）/ 样式 / 合并 / 列宽 / 行高 / 视图 */
+function copySheetExcel(src, nm, outWb){
+  var ws=outWb.addWorksheet(nm);
+  try{
+    if(src.views && src.views.length) ws.views=JSON.parse(JSON.stringify(src.views));
+    if(src.pageSetup && Object.keys(src.pageSetup).length){
+      ws.pageSetup=JSON.parse(JSON.stringify(src.pageSetup));
+    }
+  }catch(_){}
+  (src.columns||[]).forEach(function(col, i){
+    if(col && col.width!=null){ try{ ws.getColumn(i+1).width=col.width; }catch(_){}}
+  });
+  src.eachRow({includeEmpty:true}, function(row, rn){
+    var r=ws.getRow(rn);
+    if(row.height!=null){ try{ r.height=row.height; }catch(_){}}
+    row.eachCell({includeEmpty:true}, function(cell, cn){
+      var t=r.getCell(cn);
+      if(cell.value && typeof cell.value==='object' && !(cell.value instanceof Date)){
+        try{ t.value=JSON.parse(JSON.stringify(cell.value)); }  // 公式 {formula,result} / 富文本等
+        catch(_){ t.value=cell.value; }
+      }else{
+        t.value=cell.value;
+      }
+      if(cell.style && Object.keys(cell.style).length){
+        try{ t.style=JSON.parse(JSON.stringify(cell.style)); }catch(_){}
+      }
+    });
+  });
+  var merges=(src.model && src.model.merges)||[];
+  merges.forEach(function(m){ try{ ws.mergeCells(m); }catch(_){} });
+  return ws;
+}
+
+/* 主流程：结果工作簿(SheetJS 字节) + 各源文件原始表(ExcelJS 原格式) → 单个工作簿字节 */
+async function attachOriginalSheets(mainBuf, cfg){
+  var entries=BM.collectSourceSheets(cfg);
+  if(!entries.length) return mainBuf;
+  var outWb=new ExcelJS.Workbook();
+  await outWb.xlsx.load(mainBuf);
+  var used={}; outWb.worksheets.forEach(function(w){ used[w.name]=1; });
+  var byFile={};
+  entries.forEach(function(e){ (byFile[e.file]=byFile[e.file]||[]).push(e); });
+  for(var fn in byFile){
+    var f=null;
+    for(var i=0;i<cfg.files.length;i++){ if(cfg.files[i].name===fn){ f=cfg.files[i]; break; } }
+    if(!f || !f.buf) throw new Error('缺少原始文件数据：'+fn+'（请重新选择文件后再导出）');
+    var swb=new ExcelJS.Workbook();
+    await swb.xlsx.load(f.buf);
+    byFile[fn].forEach(function(e){
+      var src=swb.getWorksheet(e.sheet);
+      if(!src) return;
+      var nm=String(e.name||'原始单'), base=nm, k=2;
+      while(used[nm]) nm=base.slice(0,28)+'('+(k++)+')';
+      used[nm]=1;
+      copySheetExcel(src, nm, outWb);
+    });
+  }
+  return outWb.xlsx.writeBuffer();
+}
+
+/* 下载（留 window.__saveBuffer 测试钩子） */
+function saveBuffer(buf, name){
+  if(typeof window!=='undefined' && typeof window.__saveBuffer==='function'){
+    window.__saveBuffer(buf, name); return;
+  }
+  var blob=new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name;
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+
+/* 统一导出入口：要不要附原始单 → 三条路（原格式 / 纯数据兜底 / 不附） */
+function exportWithAttach(wb, cfg, name){
+  var nSrc=(wantAttach() && cfg) ? BM.collectSourceSheets(cfg).length : 0;
+  if(!nSrc){
+    try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
+    catch(e){ alert('导出失败：'+e.message); }
+    return;
+  }
+  if(typeof ExcelJS==='undefined'){
+    appendSourceSheets(wb, cfg);
+    try{ XLSX.writeFile(wb, name); toast('已导出：'+name+'（含原始货单 '+nSrc+' 张 · 纯数据，未找到 exceljs.min.js）'); }
+    catch(e){ alert('导出失败：'+e.message); }
+    return;
+  }
+  var mainBuf;
+  try{ mainBuf=XLSX.write(wb, {bookType:'xlsx', type:'array'}); }
+  catch(e){ alert('导出失败：'+e.message); return; }
+  attachOriginalSheets(mainBuf, cfg).then(function(buf){
+    saveBuffer(buf, name);
+    toast('已导出：'+name+'（含原始货单 '+nSrc+' 张 · 原格式含公式）');
+  }).catch(function(e){
+    console.error(e);
+    appendSourceSheets(wb, cfg);
+    try{ XLSX.writeFile(wb, name); toast('原始单原格式附加失败，已退回纯数据：'+e.message); }
+    catch(e2){ alert('导出失败：'+e2.message); }
+  });
+}
+
 btnExport.addEventListener('click', function(){
   if(!lastResult) return;
   var name=($('outName').value||DEF_OUT_MERGED).trim();
   if(!/\.xlsx$/i.test(name)) name+='.xlsx';
   var wb=BM.exportWorkbook(lastResult.rows, lastResult.headers, '发货明细汇总');
-  appendSourceSheets(wb, buildConfig());
-  try{ XLSX.writeFile(wb, name); toast('已导出：'+name+(wantAttach()?'（含原始货单 '+ (wb.SheetNames.length-1) +' 张）':'')); }
-  catch(e){ alert('导出失败：'+e.message); }
+  exportWithAttach(wb, buildConfig(), name);
 });
 
 $('btnAgain').addEventListener('click', function(){ resultBox.style.display='none'; cardLedger.style.display='none'; cardSummary.style.display='none'; ledgerOut=null; summaryOut=null; if(lgResultBox) lgResultBox.style.display='none'; if(sumResultBox) sumResultBox.style.display='none'; });
@@ -1085,9 +1197,7 @@ $('btnLedgerExport').addEventListener('click', function(){
   var name=($('lgOutName').value||'供货明细台账.xlsx').trim();
   if(!/\.xlsx$/i.test(name)) name+='.xlsx';
   var wb=BM.exportLedgerWorkbook(ledgerOut.pages);
-  appendSourceSheets(wb, buildConfig());
-  try{ XLSX.writeFile(wb, name); toast('已导出：'+name+(wantAttach()?'（含原始货单 '+ (wb.SheetNames.length-ledgerOut.pages.length) +' 张）':'')); }
-  catch(e){ alert('导出失败：'+e.message); }
+  exportWithAttach(wb, buildConfig(), name);
 });
 
 /* ================= 步骤6: 当天单楼栋发货汇总 & 对账校核 ================= */
@@ -1225,9 +1335,7 @@ $('btnSumExport').addEventListener('click', function(){
   var name=($('sumOutName').value||DEF_OUT_SUM).trim();
   if(!/\.xlsx$/i.test(name)) name+='.xlsx';
   var wb=BM.exportSummaryWorkbook(summaryOut);
-  appendSourceSheets(wb, buildConfig());
-  try{ XLSX.writeFile(wb, name); toast('已导出：'+name+(wantAttach()?'（含原始货单 '+ (wb.SheetNames.length-1) +' 张）':'')); }
-  catch(e){ alert('导出失败：'+e.message); }
+  exportWithAttach(wb, buildConfig(), name);
 });
 
 /* ---------- 工具函数 ---------- */

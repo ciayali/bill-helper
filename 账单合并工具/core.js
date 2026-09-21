@@ -6,7 +6,7 @@
   'use strict';
   var root = (typeof globalThis !== 'undefined') ? globalThis : global;
   var XLSX = root.XLSX;
-  var VERSION = '1.3.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
+  var VERSION = '1.3.1';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
   var BUILD_DATE = '2026-09-21';    // 本版本日期
 
   /* ---------------- 文本工具 ---------------- */
@@ -875,10 +875,16 @@
         var ws = wb.Sheets[sn];
         if (!ws || !ws['!ref']) return;
         var aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
-        // 建议表名：优先用文件名（一般一单一张表）；一单多表时追加 sheet 名
+        // 建议表名（≤31 字）：优先用文件名；一单多表时用“文件名-sheet名”，
+        // 文件名过长放不下时退回 sheet 名（信息在日期/车次上，比截断的文件名有用）
         var base = String(fn).replace(/\.xlsx$/i, '').replace(/[\\\/\?\*\[\]:]/g, '');
-        var nm = incNames.length > 1 ? (base + '-' + sn) : base;
-        nm = nm.slice(0, 31);
+        var nm;
+        if (incNames.length > 1) {
+          var full = base + '-' + sn;
+          nm = full.length <= 31 ? full : sn.slice(0, 31);
+        } else {
+          nm = base.slice(0, 31);
+        }
         out.push({
           file: fn, sheet: sn, name: nm, aoa: aoa,
           cols: (ws['!cols'] || []).slice(0, 40)
