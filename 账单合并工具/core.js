@@ -34,6 +34,60 @@
     return true;
   }
 
+  // 拼接一行前 nCols 列的非空文本（用空格分隔），用于识别出库总量等校核行
+  function rowText(ws, r, nCols) {
+    var parts = [];
+    for (var c = 0; c < nCols; c++) {
+      var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+      if (cell && cell.v !== null && cell.v !== undefined && String(cell.v).trim() !== '') {
+        parts.push(String(cell.v).trim());
+      }
+    }
+    return parts.join(' ');
+  }
+
+  // 从文本中按“标签：数值”格式提取数字，取不到返回 null
+  function pickNum(s, re) {
+    var m = String(s).match(re);
+    return m ? parseFloat(m[1]) : null;
+  }
+
+  // 读取单元格数值（非数字返回 null）
+  function cellNum(ws, r, c) {
+    var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+    if (!cell || cell.v === null || cell.v === undefined) return null;
+    var v = cell.v;
+    if (typeof v === 'number') return v;
+    var n = parseFloat(String(v).replace(/[^\-0-9.]/g, ''));
+    return isNaN(n) ? null : n;
+  }
+
+  function round3(n) { return Math.round(n * 1000) / 1000; }
+
+  // 比对“出库总量”标注值与明细合计，返回校核记录
+  function buildVerify(source, exp, act) {
+    function cmp(label, e, a, unit, tol) {
+      if (e === null || e === undefined) return null;
+      var ok = Math.abs(e - a) <= tol;
+      return {
+        label: label, exp: e, act: round3(a), unit: unit || '', ok: ok,
+        text: label + ' 标注 ' + e + (unit || '') + ' ／ 明细合计 ' + round3(a) + (unit || '') + (ok ? ' ✔' : ' ✘ 不符')
+      };
+    }
+    var items = [];
+    var t;
+    t = cmp('块数', exp.blocks, act.count, '块', 0.001); if (t) items.push(t);
+    t = cmp('方量', exp.volume, act.volume, 'm³', Math.max(0.02, (exp.volume || 0) * 0.005)); if (t) items.push(t);
+    t = cmp('面积', exp.area, act.area, 'm²', Math.max(0.05, (exp.area || 0) * 0.005)); if (t) items.push(t);
+    t = cmp('重量', exp.weight, act.weight, 'T', Math.max(0.02, (exp.weight || 0) * 0.005)); if (t) items.push(t);
+    return {
+      source: source,
+      ok: items.length > 0 && items.every(function (x) { return x.ok; }),
+      items: items,
+      text: items.map(function (x) { return x.text; }).join('；')
+    };
+  }
+
   /* ---------------- 日期工具 ---------------- */
 
   function pad(n) { return n < 10 ? '0' + n : String(n); }
@@ -292,7 +346,9 @@
    *             date?: { mode:'auto'|'fixed'|'col', fixed?:string, col?:string }  // 发货时间专用
    *   } ]
    * }
-   * 返回 { headers, rows, stats, warnings }
+   * 返回 { headers, rows, stats, warnings, verify }
+   *   verify: 出库总量校核结果 [{source, ok, items, text, exp, act}]，
+   *           源单底部“出库总量”行不作为明细导出，其标注总量与明细实际合计逐项比对
    */
   function merge(config) {
     var headers = [], dateEntry = null, dataCols = [];
@@ -305,6 +361,7 @@
     var rows = [];
     var warnings = [];
     var stats = {};           // 文件名 -> 行数
+    var verify = [];          // 出库总量校核结果
     var dateColIdx = headers.indexOf('发货时间');
 
     // 在指定表里按“手动指定表头文本”精确找列
@@ -373,6 +430,19 @@
         }
 
         var fileRows = 0;
+        // 明细实际合计（用于与“出库总量”标注值校核）——直接按源表列头识别体积/面积/重量列
+        var actSum = { count: 0, volume: 0, area: 0, weight: 0 };
+        var sVol = -1, sArea = -1, sWt = -1;
+        (function () {
+          var hdrs = headerTexts(ws, headerRow);
+          for (var i = 0; i < hdrs.length; i++) {
+            var h = hdrs[i] || '';
+            if (sVol < 0 && /体积|方量/.test(h)) sVol = i;
+            if (sArea < 0 && /面积/.test(h)) sArea = i;
+            if (sWt < 0 && /重量|质量/.test(h)) sWt = i;
+          }
+        })();
+        var expSum = null;        // 本表解析出的“出库总量”标注值
         for (var r2 = headerRow; r2 < lastData; r2++) {
           var kcell = ws[XLSX.utils.encode_cell({ r: r2, c: keyCol })];
           var kv = kcell ? kcell.v : null;
@@ -381,6 +451,20 @@
           if (!kt) continue;
           if (/合计|总计|小计|SUM/i.test(kt)) continue;      // 汇总行
           if (/^(司机|驾驶员|送货人|收货人|签收单位|签收人|打印人|制单人|质检员?|验收人)/.test(kt)) continue; // 签收留尾行
+          // 出库总量校核行（如“出库总量|总块数：36块|总方量：6.806m³|总面积…|总重量…”）：
+          // 不作为明细导出，解析标注总量用于校核；明细扫描到此为止（其后为签收/周转物料等留尾内容）
+          var sumLine = rowText(ws, r2, 32);
+          if (/出库总量|总块数|总数量|总方量|总体积|总面积|总重量/.test(sumLine)) {
+            var eB = pickNum(sumLine, /总块数[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+            var eV = pickNum(sumLine, /总方量[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+            if (eV === null) eV = pickNum(sumLine, /总体积[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+            var eA = pickNum(sumLine, /总面积[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+            var eW = pickNum(sumLine, /总重量[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+            if (eB !== null || eV !== null || eA !== null || eW !== null || /出库总量/.test(sumLine)) {
+              expSum = { blocks: eB, volume: eV, area: eA, weight: eW };
+              break;
+            }
+          }
           var out = [];
           for (var hi = 0; hi < headers.length; hi++) {
             var hname = headers[hi];
@@ -403,7 +487,13 @@
           }
           rows.push(out);
           fileRows++;
+          // 累计明细实际值，供出库总量校核
+          actSum.count++;
+          if (sVol >= 0)  { var nv = cellNum(ws, r2, sVol);  if (nv !== null) actSum.volume += nv; }
+          if (sArea >= 0) { var na = cellNum(ws, r2, sArea); if (na !== null) actSum.area  += na; }
+          if (sWt >= 0)   { var nw = cellNum(ws, r2, sWt);   if (nw !== null) actSum.weight += nw; }
         }
+        if (expSum) verify.push(buildVerify(fn + ' / ' + sn, expSum, actSum));
         stats[fn] = (stats[fn] || 0) + fileRows;
         var missing = dataCols.filter(function (c) { return map[c.name] === null; }).map(function (c) { return c.name; });
         if (missing.length && fileRows > 0) {
@@ -411,7 +501,7 @@
         }
       });
     });
-    return { headers: headers, rows: rows, stats: stats, warnings: warnings };
+    return { headers: headers, rows: rows, stats: stats, warnings: warnings, verify: verify };
   }
 
   /* ================= 台账生成（供货明细模板） =================

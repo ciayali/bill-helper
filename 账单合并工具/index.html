@@ -81,6 +81,10 @@
   #resStats .lab{font-size:12px;color:var(--sub);}
   #warnBox{max-height:130px;overflow:auto;background:#fff8eb;border:1px solid #f3e0b8;border-radius:7px;
     padding:8px 12px;font-size:12.5px;color:#7c5315;display:none;margin-top:8px;}
+  #checkBox{max-height:170px;overflow:auto;background:#f2fbf5;border:1px solid #c9e8d3;border-radius:7px;
+    padding:8px 12px;font-size:12.5px;color:#256a3c;display:none;margin-top:8px;}
+  #checkBox b{display:block;margin-bottom:4px;}
+  #checkBox .bad{background:#fdf0f0;border:1px solid #f0cccc;border-radius:5px;color:#a03030;}
   #previewTblWrap{overflow:auto;max-height:340px;border:1px solid var(--line);border-radius:8px;margin-top:8px;}
   #previewTbl{border-collapse:collapse;font-size:12.5px;white-space:nowrap;}
   #previewTbl th,#previewTbl td{border:1px solid #e8ecf2;padding:3px 10px;}
@@ -175,6 +179,7 @@
     </div>
     <div id="result">
       <div id="resStats"></div>
+      <div id="checkBox"></div>
       <div id="warnBox"></div>
       <div class="muted">预览（前 20 行，导出为完整数据）：</div>
       <div id="previewTblWrap"><table id="previewTbl"></table></div>
@@ -319,6 +324,7 @@ function resetAll(){
   btnExport.disabled=true;
   $('resStats').innerHTML='';
   var wb=$('warnBox'); if(wb){ wb.style.display='none'; wb.innerHTML=''; }
+  var cb=$('checkBox'); if(cb){ cb.style.display='none'; cb.innerHTML=''; }
   var tb=$('previewTbl'); if(tb) tb.innerHTML='';
   window.scrollTo({top:0, behavior:'smooth'});
   toast('已清空，请重新选择文件');
@@ -678,6 +684,15 @@ btnMerge.addEventListener('click', function(){
     html+='<div><div class="big" style="font-size:18px">'+out.stats[fn]+'</div><div class="lab">'+esc(fn)+'</div></div>';
   });
   $('resStats').innerHTML=html;
+  // 出库总量校核（源单标注 vs 明细合计）
+  var cb=$('checkBox');
+  if(out.verify && out.verify.length){
+    var allOk=out.verify.every(function(v){return v.ok;});
+    cb.style.display='block';
+    cb.className=allOk?'':'bad';
+    cb.innerHTML='<b>'+(allOk?'☑ 出库总量校核：全部相符':'⚠ 出库总量校核：存在不符项，请核对')+'</b>'+
+      out.verify.map(function(v){ return '<div>· '+esc(v.source)+' — '+esc(v.text)+'</div>'; }).join('');
+  } else { cb.style.display='none'; cb.innerHTML=''; }
   // warnings
   var wb=$('warnBox');
   if(out.warnings.length){
