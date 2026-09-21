@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 v1.1.0 · 本地离线版</title>
+<title>账单合并工具 v1.2.0 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -121,12 +121,32 @@
   table.lgTbl tr.k-sub td,table.lgTbl tr.k-segsum td,table.lgTbl tr.k-total td{background:#f6f2e7;font-weight:700;}
   table.lgTbl tr.k-total td{background:#efe9f7;color:#5b21b6;}
   table.lgTbl td.num{text-align:right;font-variant-numeric:tabular-nums;}
+  /* ===== 步骤6: 当天单楼栋发货汇总 & 对账校核 ===== */
+  #sumStats{display:flex;gap:22px;flex-wrap:wrap;margin:8px 0;}
+  #sumStats .big{font-size:24px;font-weight:700;color:var(--accent);}
+  #sumStats .lab{font-size:12px;color:var(--sub);}
+  #sumWarn{max-height:120px;overflow:auto;background:#fff8eb;border:1px solid #f3e0b8;border-radius:7px;
+    padding:8px 12px;font-size:12.5px;color:#7c5315;margin-top:8px;}
+  #sumPreviewWrap{overflow:auto;max-height:380px;border:1px solid var(--line);border-radius:8px;margin-top:4px;}
+  table.sumTbl{border-collapse:collapse;font-size:12.5px;white-space:nowrap;width:100%;}
+  table.sumTbl th,table.sumTbl td{border:1px solid #e8ecf2;padding:3px 10px;}
+  table.sumTbl th{background:var(--headbg);position:sticky;top:0;z-index:2;}
+  table.sumTbl tr.sumTotal td{background:#dbe7fb;font-weight:700;}
+  table.sumTbl td.num{text-align:right;font-variant-numeric:tabular-nums;}
+  #sumVerifyInputs{display:flex;gap:10px 16px;flex-wrap:wrap;align-items:flex-end;
+    background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:6px;}
+  #sumVerifyInputs .svItem{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--sub);}
+  #sumVerifyInputs input{width:120px;}
+  #sumVerifyBox{max-height:170px;overflow:auto;background:#f2fbf5;border:1px solid #c9e8d3;border-radius:7px;
+    padding:8px 12px;font-size:12.5px;color:#256a3c;display:none;margin-top:10px;}
+  #sumVerifyBox b{display:block;margin-bottom:4px;}
+  #sumVerifyBox .bad{background:#fdf0f0;border:1px solid #f0cccc;border-radius:5px;color:#a03030;}
 </style>
 </head>
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.1.0</b></span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.2.0</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
@@ -255,6 +275,36 @@
       <div id="lgPreviewWrap"></div>
     </div>
   </div>
+
+  <!-- 步骤6: 当天单楼栋发货汇总 & 对账校核 -->
+  <div class="card" id="cardSummary" style="display:none;">
+    <h2><span class="step-tag">6</span>当天单楼栋发货汇总 &amp; 对账校核<small>按“发货日期 × 楼栋”汇总出库数据（车次/件数/方量/重量/面积/金额），可与对账单汇总页的合计逐项核对</small></h2>
+    <div class="toolbar">
+      <button id="btnSummary">生成汇总预览</button>
+      <label class="muted">导出文件名<small>（默认跟随导入文件名，可修改）</small>
+        <input type="text" id="sumOutName" value="当天单楼栋发货汇总.xlsx" style="width:250px;">
+      </label>
+    </div>
+    <div id="sumResult" style="display:none;">
+      <div id="sumStats"></div>
+      <div id="sumWarn" style="display:none;"></div>
+      <div class="muted" style="margin:10px 0 4px;">汇总明细（发货日期 × 楼栋，尾行合计；计价规则与步骤 5 共用）：</div>
+      <div id="sumPreviewWrap"></div>
+      <div class="muted" style="margin:12px 0 2px;">对账校核：把对账单汇总页（一般是第一张表）的合计抄到“期望值”，留空的项不参与核对；同时自动比对台账合计。</div>
+      <div id="sumVerifyInputs">
+        <label class="svItem">期望件数<input type="number" id="svCount" placeholder="如 496" step="any"></label>
+        <label class="svItem">期望体积(m³)<input type="number" id="svVol" placeholder="可空" step="any"></label>
+        <label class="svItem">期望重量(T)<input type="number" id="svWt" placeholder="可空" step="any"></label>
+        <label class="svItem">期望面积(m²)<input type="number" id="svArea" placeholder="如 2579.571" step="any"></label>
+        <label class="svItem">期望金额(元)<input type="number" id="svAmt" placeholder="如 330172.45" step="any"></label>
+        <button id="btnSumVerify" class="ghost">核对</button>
+      </div>
+      <div id="sumVerifyBox"></div>
+      <div class="toolbar" style="margin-top:10px;">
+        <button id="btnSumExport">⬇ 导出汇总 Excel</button>
+      </div>
+    </div>
+  </div>
 </main>
 
 <div id="footerTxt">数据完全在本地浏览器中处理，不上传任何文件。用完后直接关闭本页即可。</div>
@@ -317,7 +367,8 @@ function resetAll(){
   if($('outName')) $('outName').value=DEF_OUT_MERGED;
   if($('lgOutName')) $('lgOutName').value=DEF_OUT_LEDGER;
   if($('lgTitle')) $('lgTitle').value=DEF_LG_TITLE;
-  autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER, t:DEF_LG_TITLE };
+  if($('sumOutName')) $('sumOutName').value=DEF_OUT_SUM;
+  autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER, t:DEF_LG_TITLE, s:DEF_OUT_SUM };
   // DOM 复位到初始状态
   drop.style.display='';
   fileList.style.display='none';
@@ -329,9 +380,16 @@ function resetAll(){
   cardMap.style.display='none';
   resultBox.style.display='none';
   cardLedger.style.display='none';
+  cardSummary.style.display='none';
   ledgerOut=null;
+  summaryOut=null;
   if(lgResultBox){ lgResultBox.style.display='none'; }
   if(lgWarnBox){ lgWarnBox.style.display='none'; }
+  if(sumResultBox){ sumResultBox.style.display='none'; }
+  if(sumWarnBox){ sumWarnBox.style.display='none'; sumWarnBox.innerHTML=''; }
+  if(sumVerifyBox){ sumVerifyBox.style.display='none'; sumVerifyBox.innerHTML=''; }
+  if(sumPreviewWrap){ sumPreviewWrap.innerHTML=''; }
+  if(sumStatsBox){ sumStatsBox.innerHTML=''; }
   btnExport.disabled=true;
   $('resStats').innerHTML='';
   var wb=$('warnBox'); if(wb){ wb.style.display='none'; wb.innerHTML=''; }
@@ -384,8 +442,8 @@ function afterLoad(){
 /* ---------- 导出文件名/台账标题默认跟随导入文件命名 ---------- */
 /* 注意：默认值里一律不写具体项目名（曾写死“百德·尚谷大院”，换项目时会误导） */
 var DEF_OUT_MERGED='发货明细汇总.xlsx', DEF_OUT_LEDGER='供货明细台账.xlsx',
-    DEF_LG_TITLE='预制构件供货明细';
-var autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER, t:DEF_LG_TITLE };  // 最近一次自动填充的值
+    DEF_LG_TITLE='预制构件供货明细', DEF_OUT_SUM='当天单楼栋发货汇总.xlsx';
+var autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER, t:DEF_LG_TITLE, s:DEF_OUT_SUM };  // 最近一次自动填充的值
 /* 从已导入文件名推一个公共基名：
    单文件=去掉 .xlsx 的文件名；多文件=最长公共前缀（去掉尾部分隔符/编号），推不出则返回 '' */
 function importBaseName(){
@@ -415,17 +473,18 @@ function autoOutNames(){
   var base=importBaseName();
   var m=base ? base+'-合并明细.xlsx'     : DEF_OUT_MERGED;
   var l=base ? base+'-供货明细台账.xlsx' : DEF_OUT_LEDGER;
+  var s=base ? base+'-当天单楼栋发货汇总.xlsx' : DEF_OUT_SUM;
   var pn=projectName();
   var t=pn ? pn+'预制构件供货明细' : DEF_LG_TITLE;
-  [ ['outName',m,'m'], ['lgOutName',l,'l'], ['lgTitle',t,'t'] ].forEach(function(it){
+  [ ['outName',m,'m'], ['lgOutName',l,'l'], ['lgTitle',t,'t'], ['sumOutName',s,'s'] ].forEach(function(it){
     var el=$(it[0]); if(!el) return;
     var v=String(el.value||'').trim();
     // 当前值仍是默认值或上次自动值（=用户没手改过）才更新，避免覆盖用户输入
-    if(!v || v===DEF_OUT_MERGED || v===DEF_OUT_LEDGER || v===DEF_LG_TITLE || v===autoLast[it[2]]){
+    if(!v || v===DEF_OUT_MERGED || v===DEF_OUT_LEDGER || v===DEF_LG_TITLE || v===DEF_OUT_SUM || v===autoLast[it[2]]){
       el.value=it[1];
     }
   });
-  autoLast={ m:m, l:l, t:t };
+  autoLast={ m:m, l:l, t:t, s:s };
 }
 
 /* ---------- 步骤2: 文件/工作表清单 ---------- */
@@ -697,11 +756,18 @@ btnMerge.addEventListener('click', function(){
   lastResult=out;
   window.__lastResult=out;      // 诊断/自动化测试用，正常使用无影响
   resultBox.style.display='block';
-  // 合并成功 → 显示步骤5 台账面板，并清掉上一次的台账预览(需重新生成)
+  // 合并成功 → 显示步骤5 台账面板与步骤6 汇总面板，并清掉上一次的预览(需重新生成)
   cardLedger.style.display='block';
+  cardSummary.style.display='block';
   ledgerOut=null;
+  summaryOut=null;
   lgResultBox.style.display='none';
   lgWarnBox.style.display='none';
+  sumResultBox.style.display='none';
+  sumWarnBox.style.display='none'; sumWarnBox.innerHTML='';
+  sumVerifyBox.style.display='none'; sumVerifyBox.innerHTML='';
+  sumPreviewWrap.innerHTML='';
+  sumStatsBox.innerHTML='';
   // stats
   var html='';
   html+='<div><div class="big">'+out.rows.length+'</div><div class="lab">总明细行数</div></div>';
@@ -749,7 +815,7 @@ btnExport.addEventListener('click', function(){
   catch(e){ alert('导出失败：'+e.message); }
 });
 
-$('btnAgain').addEventListener('click', function(){ resultBox.style.display='none'; cardLedger.style.display='none'; ledgerOut=null; if(lgResultBox) lgResultBox.style.display='none'; });
+$('btnAgain').addEventListener('click', function(){ resultBox.style.display='none'; cardLedger.style.display='none'; cardSummary.style.display='none'; ledgerOut=null; summaryOut=null; if(lgResultBox) lgResultBox.style.display='none'; if(sumResultBox) sumResultBox.style.display='none'; });
 
 /* ================= 步骤5: 由合并结果生成台账 ================= */
 var cardLedger=$('cardLedger'), lgResultBox=$('lgResult'), lgWarnBox=$('lgWarn'),
@@ -930,6 +996,144 @@ $('btnLedgerExport').addEventListener('click', function(){
   var name=($('lgOutName').value||'供货明细台账.xlsx').trim();
   if(!/\.xlsx$/i.test(name)) name+='.xlsx';
   var wb=BM.exportLedgerWorkbook(ledgerOut.pages);
+  try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
+  catch(e){ alert('导出失败：'+e.message); }
+});
+
+/* ================= 步骤6: 当天单楼栋发货汇总 & 对账校核 ================= */
+var cardSummary=$('cardSummary'), sumResultBox=$('sumResult'), sumWarnBox=$('sumWarn'),
+    sumStatsBox=$('sumStats'), sumPreviewWrap=$('sumPreviewWrap'), sumVerifyBox=$('sumVerifyBox');
+var summaryOut=null;   // {groups, totals, warnings}
+var SUM_HEAD=['发货日期','楼栋','产品名称','车次数','构件件数','体积(m³)','重量(t)','面积(m²)','含税金额(元)'];
+
+/* 从合并结果构造汇总输入（含每行来源，用于计车次） */
+function buildSummaryItems(){
+  var H={};
+  lastResult.headers.forEach(function(h,i){ H[BM.clean(h)]=i; });
+  function I(n){ return (n in H)? H[n] : -1; }
+  var iCode=I('构件编号'), iBld=I('楼栋'), iType=I('构件类型'),
+      iVA=I('单块体积/面积'), iWt=I('单体质量'),
+      iD=(I('发货时间')>=0? I('发货时间') : I('发货日期'));
+  var meta=lastResult.rowMeta||[];
+  function g(r,i){ return (i>=0 && i<r.length) ? r[i] : ''; }
+  var items=[];
+  lastResult.rows.forEach(function(r,ri){
+    var code=BM.clean(g(r,iCode)), type=BM.clean(g(r,iType)), bld=BM.clean(g(r,iBld));
+    if(!code && !type && !bld) return;                    // 空白行
+    var m=meta[ri]||{};
+    items.push({
+      d: BM.toDateText(g(r,iD)),
+      bld: g(r,iBld), type: g(r,iType),
+      va: parseFloat(g(r,iVA)), wt: parseFloat(g(r,iWt)),
+      src: (m.file||'?')+' / '+(m.sheet||'?')
+    });
+  });
+  return items;
+}
+
+function doSummary(){
+  if(!lastResult || !lastResult.rows || !lastResult.rows.length){
+    alert('请先在步骤 4 点击“合并并预览”，得到合并数据后再生成汇总。'); return;
+  }
+  var items=buildSummaryItems();
+  var out=BM.buildDailySummary(items, { priceRules: collectPriceRules() });
+  summaryOut=out;
+  sumResultBox.style.display='block';
+  // 统计
+  var t=out.totals;
+  sumStatsBox.innerHTML=
+    '<div><div class="big">'+out.groups.length+'</div><div class="lab">日期×楼栋 分组</div></div>'+
+    '<div><div class="big">'+t.cars+'</div><div class="lab">车次（按表计）</div></div>'+
+    '<div><div class="big">'+t.count+'</div><div class="lab">构件件数</div></div>'+
+    '<div><div class="big">'+t.area+'</div><div class="lab">面积合计(m²)</div></div>'+
+    '<div><div class="big">'+t.vol+'</div><div class="lab">体积合计(m³)</div></div>'+
+    '<div><div class="big">¥'+fmtMoney(t.amt)+'</div><div class="lab">含税金额合计</div></div>';
+  // 警告
+  if(out.warnings && out.warnings.length){
+    sumWarnBox.style.display='block';
+    sumWarnBox.innerHTML='<b>⚠ 提示（'+out.warnings.length+' 条）：</b><br>'+
+      out.warnings.slice(0,60).map(function(w){return '· '+esc(w);}).join('<br>')+
+      (out.warnings.length>60?'<br>…（其余已省略）':'');
+  } else sumWarnBox.style.display='none';
+  renderSumTable();
+  renderSumVerify();
+}
+
+function renderSumTable(){
+  var h='<table class="sumTbl"><thead><tr>';
+  SUM_HEAD.forEach(function(x){ h+='<th>'+esc(x)+'</th>'; });
+  h+='</tr></thead><tbody>';
+  summaryOut.groups.forEach(function(g){
+    h+='<tr><td>'+esc(g.date)+'</td><td>'+esc(g.bld)+'</td><td>'+esc(g.labels)+'</td>'+
+       '<td class="num">'+g.cars+'</td><td class="num">'+g.count+'</td>'+
+       '<td class="num">'+g.vol+'</td><td class="num">'+g.wt+'</td>'+
+       '<td class="num">'+g.area+'</td><td class="num">'+fmtMoney(g.amt)+'</td></tr>';
+  });
+  var t=summaryOut.totals;
+  h+='<tr class="sumTotal"><td>合计</td><td></td><td></td>'+
+     '<td class="num">'+t.cars+'</td><td class="num">'+t.count+'</td>'+
+     '<td class="num">'+t.vol+'</td><td class="num">'+t.wt+'</td>'+
+     '<td class="num">'+t.area+'</td><td class="num">'+fmtMoney(t.amt)+'</td></tr>';
+  h+='</tbody></table>';
+  sumPreviewWrap.innerHTML=h;
+}
+
+/* ---------- 对账校核 ---------- */
+function svVal(id){
+  var el=$(id); if(!el) return null;
+  var v=String(el.value||'').trim();
+  if(v==='') return null;
+  var n=parseFloat(v);
+  return isNaN(n) ? null : n;
+}
+function ledgerAmount(){
+  if(!ledgerOut || !ledgerOut.pages || !ledgerOut.pages.length) return null;
+  var s=0;
+  ledgerOut.pages.forEach(function(pg){ s+=(pg.amount||0); });
+  return Math.round(s*100)/100;
+}
+function renderSumVerify(){
+  if(!summaryOut){ sumVerifyBox.style.display='none'; return; }
+  var v=BM.verifyTotals(summaryOut.totals, {
+    count: svVal('svCount'), vol: svVal('svVol'), wt: svVal('svWt'),
+    area: svVal('svArea'), amt: svVal('svAmt')
+  });
+  var html='';
+  if(v.items.length){
+    html+='<b>'+(v.ok?'☑ 对账校核：全部相符':'⚠ 对账校核：存在不符项，请核对')+'</b>'+
+      v.items.map(function(x){ return '<div>· '+esc(x.text)+'</div>'; }).join('');
+  }
+  // 自动比对：台账合计 vs 汇总合计
+  var la=ledgerAmount();
+  if(la!==null){
+    var okA=Math.abs(la-summaryOut.totals.amt)<=Math.max(0.05, la*0.005);
+    html+='<div>· 台账合计 ¥'+fmtMoney(la)+' ／ 汇总合计 ¥'+fmtMoney(summaryOut.totals.amt)+
+      (okA?' ✔ 相符':' ✘ 不符（两处计价规则相同，若不符请检查日期偏移/日期范围设置）')+'</div>';
+    if(!v.items.length){
+      html='<b>'+(okA?'☑ 自动校核：台账与汇总金额相符':'⚠ 自动校核：台账与汇总金额不符')+'</b>'+html;
+    } else if(okA){
+      html+='<div>· 另：台账合计与汇总合计自动比对相符 ✔</div>';
+    }
+  }
+  if(!html){ sumVerifyBox.style.display='none'; sumVerifyBox.innerHTML=''; return; }
+  var allBad=!v.items.length ? false : !v.ok;
+  sumVerifyBox.style.display='block';
+  sumVerifyBox.className=allBad?'bad':'';
+  sumVerifyBox.innerHTML=html;
+}
+['svCount','svVol','svWt','svArea','svAmt'].forEach(function(id){
+  var el=$(id); if(el) el.addEventListener('input', renderSumVerify);
+});
+$('btnSumVerify').addEventListener('click', renderSumVerify);
+
+$('btnSummary').addEventListener('click', doSummary);
+$('btnSumExport').addEventListener('click', function(){
+  if(!summaryOut || !summaryOut.groups || !summaryOut.groups.length){
+    alert('请先生成汇总预览。'); return;
+  }
+  var name=($('sumOutName').value||DEF_OUT_SUM).trim();
+  if(!/\.xlsx$/i.test(name)) name+='.xlsx';
+  var wb=BM.exportSummaryWorkbook(summaryOut);
   try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
   catch(e){ alert('导出失败：'+e.message); }
 });

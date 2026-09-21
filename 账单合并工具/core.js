@@ -6,7 +6,7 @@
   'use strict';
   var root = (typeof globalThis !== 'undefined') ? globalThis : global;
   var XLSX = root.XLSX;
-  var VERSION = '1.1.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
+  var VERSION = '1.2.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
   var BUILD_DATE = '2026-09-21';    // 本版本日期
 
   /* ---------------- 文本工具 ---------------- */
@@ -347,7 +347,8 @@
    *             date?: { mode:'auto'|'fixed'|'col', fixed?:string, col?:string }  // 发货时间专用
    *   } ]
    * }
-   * 返回 { headers, rows, stats, warnings, verify }
+   * 返回 { headers, rows, rowMeta, stats, warnings, verify }
+   *   rowMeta: 与 rows 一一对应的来源信息 [{file, sheet, date}]（汇总/校核扩展用，不影响导出列）
    *   verify: 出库总量校核结果 [{source, ok, items, text, exp, act}]，
    *           源单底部“出库总量”行不作为明细导出，其标注总量与明细实际合计逐项比对
    */
@@ -360,6 +361,7 @@
       else dataCols.push(c);
     });
     var rows = [];
+    var rowMeta = [];         // 与 rows 平行：每行来自哪个文件/哪张表/哪天
     var warnings = [];
     var stats = {};           // 文件名 -> 行数
     var verify = [];          // 出库总量校核结果
@@ -487,6 +489,8 @@
             out.push(val === null || val === undefined ? '' : val);
           }
           rows.push(out);
+          rowMeta.push({ file: fn, sheet: sn,
+            date: (dateColIdx >= 0 ? (out[dateColIdx] || '') : (baseDate || '')) });
           fileRows++;
           // 累计明细实际值，供出库总量校核
           actSum.count++;
@@ -502,7 +506,7 @@
         }
       });
     });
-    return { headers: headers, rows: rows, stats: stats, warnings: warnings, verify: verify };
+    return { headers: headers, rows: rows, rowMeta: rowMeta, stats: stats, warnings: warnings, verify: verify };
   }
 
   /* ================= 台账生成（供货明细模板） =================
@@ -668,6 +672,140 @@
     return { pages: pages, warnings: uniqWarn(warnings) };
   }
 
+  /* ================= 当天单楼栋发货汇总（日期 × 楼栋） =================
+   * items（调用方从合并结果提取）：
+   *   { d:'yyyy-mm-dd', bld, type, va(单块体积/面积值), wt(单体质量), src:'文件/表'(计车次) }
+   * opts = { priceRules, blankBldLabel }
+   * 计价规则与台账一致（首中即用）；金额 = 数量×含税单价，数量按规则的计量方式取 va。
+   * 返回 { groups:[{date,bld,labels,cars,count,vol,wt,area,amt}], totals:{...}, warnings }
+   */
+  function matchRule(type, rules) {
+    for (var ri = 0; ri < rules.length; ri++) {
+      var rr = rules[ri], hit = false, k;
+      for (k = 0; k < (rr.kw || []).length; k++) if (type.indexOf(rr.kw[k]) >= 0) { hit = true; break; }
+      if (!hit) continue;
+      var bad = false;
+      for (k = 0; k < (rr.exclude || []).length; k++) if (type.indexOf(rr.exclude[k]) >= 0) { bad = true; break; }
+      if (!bad) return { rule: rr, idx: ri };
+    }
+    return null;
+  }
+
+  function buildDailySummary(items, opts) {
+    opts = opts || {};
+    var blankBld = opts.blankBldLabel || '未填楼栋';
+    var rules = opts.priceRules && opts.priceRules.length ? opts.priceRules
+      : [{ label: 'PC叠合板', kw: ['叠合板'], exclude: ['桁架'], unit: '体积', price: 2300 },
+         { label: 'PC楼梯', kw: ['楼梯'], exclude: [], unit: '体积', price: 2500 },
+         { label: '钢管桁架预应力叠合板', kw: ['桁架'], exclude: [], unit: '面积', price: 160 }];
+    var warnings = [];
+    function num(v) { var n = parseFloat(v); return isNaN(n) ? null : n; }
+    function r2(x) { return Math.round(x * 100) / 100; }
+
+    var map = {};      // key: date+\u0001+bld
+    var order = [];
+    items.forEach(function (it) {
+      var d = toDateText(it.d);
+      if (!d) { warnings.push('明细缺少日期（' + (it.src || '?') + '），未计入汇总'); return; }
+      var bld = clean(it.bld) || blankBld;
+      var type = clean(it.type);
+      var m = matchRule(type, rules);
+      if (!m) {
+        warnings.push('构件类型“' + (type || '(空)') + '”未匹配计价规则（' + bld + '），金额按 0 记');
+        m = { rule: { label: type || '未分类', unit: '体积', price: 0 }, idx: 1e9 };
+      }
+      var qty = num(it.va);
+      if (qty === null || qty < 0) {
+        qty = 0;
+        warnings.push('构件缺少' + (m.rule.unit === '面积' ? '面积' : '体积') + '：' + (it.src || '') + '（' + bld + '），按 0 计');
+      }
+      var wt = num(it.wt); if (wt === null || wt < 0) wt = 0;
+      var key = d + '\u0001' + bld;
+      var g = map[key];
+      if (!g) {
+        g = map[key] = { date: d, bld: bld, labels: [], labelSet: {}, cars: {}, carN: 0,
+                         count: 0, vol: 0, wt: 0, area: 0, amt: 0 };
+        order.push(key);
+      }
+      g.count++;
+      if (m.rule.unit === '面积') g.area += qty; else g.vol += qty;
+      g.wt += wt;
+      g.amt += qty * m.rule.price;
+      if (!g.labelSet[m.rule.label]) { g.labelSet[m.rule.label] = 1; g.labels.push(m.rule.label); }
+      var src = clean(it.src);
+      if (src && !g.cars[src]) { g.cars[src] = 1; g.carN++; }
+    });
+
+    order.sort(function (a, b) {
+      var ga = map[a], gb = map[b];
+      if (ga.date !== gb.date) return ga.date < gb.date ? -1 : 1;
+      if (ga.bld !== gb.bld) return ga.bld < gb.bld ? -1 : 1;
+      return 0;
+    });
+    var groups = order.map(function (k) {
+      var g = map[k];
+      return { date: g.date, bld: g.bld, labels: g.labels.join('、'),
+               cars: g.carN, count: g.count, vol: round3(g.vol), wt: round3(g.wt),
+               area: round3(g.area), amt: r2(g.amt) };
+    });
+    var totals = { cars: 0, count: 0, vol: 0, wt: 0, area: 0, amt: 0 };
+    groups.forEach(function (g) {
+      totals.cars += g.cars; totals.count += g.count;
+      totals.vol += g.vol; totals.wt += g.wt; totals.area += g.area; totals.amt += g.amt;
+    });
+    totals.vol = round3(totals.vol); totals.wt = round3(totals.wt);
+    totals.area = round3(totals.area); totals.amt = r2(totals.amt);
+    function uniqWarn(list) {
+      var cnt = {}, ord = [];
+      list.forEach(function (m) { if (!(m in cnt)) { cnt[m] = 0; ord.push(m); } cnt[m]++; });
+      return ord.map(function (m) { return cnt[m] > 1 ? m + '（共 ' + cnt[m] + ' 条）' : m; });
+    }
+    return { groups: groups, totals: totals, warnings: uniqWarn(warnings) };
+  }
+
+  /* ---------- 合计校核：明细实际合计 vs 期望值（如对账单汇总页抄来的数） ---------- */
+  /* actual / expected: {count, vol, wt, area, amt} 中任意子集，null 忽略该项 */
+  function verifyTotals(actual, expected) {
+    var items = [];
+    function cmp(label, e, a, unit, tol) {
+      if (e === null || e === undefined || isNaN(e)) return;
+      a = a || 0;
+      var ok = Math.abs(e - a) <= tol;
+      items.push({
+        label: label, exp: e, act: round3(a), unit: unit || '', ok: ok,
+        text: label + ' 期望 ' + e + (unit || '') + ' ／ 实际合计 ' + round3(a) + (unit || '') +
+              (ok ? ' ✔' : ' ✘ 差 ' + round3(a - e) + (unit || ''))
+      });
+    }
+    var e = expected || {};
+    cmp('件数', e.count, actual.count, '件', 0.001);
+    cmp('体积', e.vol, actual.vol, 'm³', Math.max(0.02, (e.vol || 0) * 0.005));
+    cmp('重量', e.wt, actual.wt, 'T', Math.max(0.02, (e.wt || 0) * 0.005));
+    cmp('面积', e.area, actual.area, 'm²', Math.max(0.05, (e.area || 0) * 0.005));
+    cmp('金额', e.amt, actual.amt, '元', Math.max(0.05, (e.amt || 0) * 0.005));
+    return {
+      ok: items.length > 0 && items.every(function (x) { return x.ok; }),
+      items: items,
+      text: items.map(function (x) { return x.text; }).join('；')
+    };
+  }
+
+  /* ---------- 汇总导出（浏览器用） ---------- */
+  var SUM_HEAD = ['发货日期', '楼栋', '产品名称', '车次数', '构件件数', '体积(m³)', '重量(t)', '面积(m²)', '含税金额(元)'];
+  function exportSummaryWorkbook(sum) {
+    var aoa = [SUM_HEAD.slice()];
+    (sum.groups || []).forEach(function (g) {
+      aoa.push([g.date, g.bld, g.labels, g.cars, g.count, g.vol, g.wt, g.area, g.amt]);
+    });
+    var t = sum.totals || {};
+    aoa.push(['合计', '', '', t.cars || 0, t.count || 0, t.vol || 0, t.wt || 0, t.area || 0, t.amt || 0]);
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 26 }, { wch: 8 }, { wch: 10 }, { wch: 11 }, { wch: 10 }, { wch: 11 }, { wch: 14 }];
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '当天单楼栋发货汇总');
+    return wb;
+  }
+
   /* ---------------- 导出（浏览器用） ---------------- */
   function exportWorkbook(rows, headers, sheetName) {
     var aoa = [headers].concat(rows);
@@ -717,8 +855,11 @@
     clean: clean,
     merge: merge,
     buildLedger: buildLedger,
+    buildDailySummary: buildDailySummary,
+    verifyTotals: verifyTotals,
     exportWorkbook: exportWorkbook,
     exportLedgerWorkbook: exportLedgerWorkbook,
+    exportSummaryWorkbook: exportSummaryWorkbook,
     SYNONYMS: SYNONYMS
   };
 
