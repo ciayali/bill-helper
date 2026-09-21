@@ -6,7 +6,7 @@
   'use strict';
   var root = (typeof globalThis !== 'undefined') ? globalThis : global;
   var XLSX = root.XLSX;
-  var VERSION = '1.4.1';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
+  var VERSION = '1.5.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
   var BUILD_DATE = '2026-09-21';    // 本版本日期
 
   /* ---------------- 文本工具 ---------------- */
@@ -482,8 +482,9 @@
         }
 
         // ---- 「单块体积/面积」列的语义（体积 or 面积）----
-        // 源表可能只有体积列（如翔安一中出库单），而构件按面积计价；
-        // 这里记下语义，台账/汇总才能把数值放进正确的一格，并在缺另一项时用尺寸推算。
+        // 源表可能只有体积列（如翔安一中出库单），而构件按面积计价。
+        // 这里记下语义，台账/汇总才能把数值放进正确的一格；
+        // 计价时缺口径的问题由步骤 5 的「双价规则」解决，不再用尺寸推算（v1.5.0）。
         var qSem = '';
         (function () {
           for (var qi = 0; qi < dataCols.length; qi++) {
@@ -607,12 +608,31 @@
    *     w, l, h: 板宽/长/厚(拼规格型号), vol, area, c:忽略 }
    * opts = { title, priceRules, segment:{mode:'month'|'cutday'|'single', cutDay},
    *          singleLabel, bldOrder:[楼栋页顺序] }
-   * priceRules: [{label, kw[], exclude[], unit:'体积'|'面积', price}] 按顺序首中即用；
+   * priceRules: [{label, kw[], exclude[], unit:'体积'|'面积', price, price2}] 按顺序首中即用；
+   *   price = 按 unit 计量方式的单价（体积→元/m³、面积→元/m²）；
+   *   price2 = 另一计量方式的单价（可选）。当优先口径的数量在单据里没有时，
+   *   若另一口径的数量与 price2 齐备，自动改用另一口径计价（v1.5.0 双价计价，
+   *   替代旧的“用长×宽推算面积”——异形板的长×宽不是实际面积）。
    *   规则顺序同时决定同一天内小计块的排列顺序
    * 小计块口径 = (页楼栋 + 发货日期 + 产品名)合并一块，尾部跟“小计：”
    * 楼栋为空的明细不丢弃，归入 opts.blankBldLabel（默认「未填楼栋」）页
    * 返回 { pages:[{name, aoa, mark, amount}], warnings:[...] }
    */
+
+  /* 双价计价取数：优先口径有数量且已填单价 → 直接用；否则另一口径的量与价（price2）
+   * 齐备 → 自动改用。返回 {qty, unit, price} 或 null（无法计价，由调用方给警告）。
+   * price=0 视为“已填”（未匹配规则的兜底按 0 元记）；price2 必须 >0 才启用。 */
+  function pickPricing(rule, primQty, altQty) {
+    function pn(v) { if (v === undefined || v === null || v === '') return null; var n = parseFloat(v); return isNaN(n) ? null : n; }
+    var pPrice = pn(rule.price);
+    if (primQty !== undefined && primQty !== null && primQty >= 0 && pPrice !== null)
+      return { qty: primQty, unit: rule.unit, price: pPrice };
+    var aPrice = pn(rule.price2);
+    if (altQty !== undefined && altQty !== null && altQty >= 0 && aPrice !== null && aPrice > 0)
+      return { qty: altQty, unit: rule.unit === '面积' ? '体积' : '面积', price: aPrice };
+    return null;
+  }
+
   function buildLedger(dataRows, opts) {
     opts = opts || {};
     var title = opts.title || '预制构件供货明细';
@@ -660,17 +680,21 @@
         warnings.push('构件类型“' + (type || '(空)') + '”未匹配计价规则（' + bld + ' ' + (r.code || '') + '），按单价0记入，请检查');
         rule = { label: type || '未分类', unit: '体积', price: 0 };
       }
-      var qty = num(rule.unit === '面积' ? r.area : r.vol);
-      if (qty === null || qty < 0) {
-        qty = '';
-        warnings.push('构件缺少' + (rule.unit === '面积' ? '面积' : '体积') + '：' + rule.label + ' ' + (r.code || '') + '（' + bld + '），金额留空');
-      }
+      /* v1.5.0 双价计价：优先口径（rule.unit）有数量且已填单价 → 直接用；
+       * 否则若另一口径的数量与 price2 齐备 → 自动改用（不再用长×宽推算面积） */
+      var primVol = rule.unit !== '面积';
+      var pr = pickPricing(rule, primVol ? num(r.vol) : num(r.area), primVol ? num(r.area) : num(r.vol));
+      var qty = '', unit = rule.unit, price = 0;
+      if (pr) { qty = pr.qty; unit = pr.unit; price = pr.price; }
+      else warnings.push('构件缺少' + (rule.unit === '面积' ? '面积' : '体积') +
+        '且未填「' + (rule.unit === '面积' ? '体积' : '面积') + '」单价（可在计价规则里把两个价都填上）：' +
+        rule.label + ' ' + (r.code || '') + '（' + bld + '），金额留空');
       recs.push({
         c: r.c || 0, d: r.d || '', bld: bld, bldRaw: bldRaw, fl: clean(r.fl), li: ruleIdx,
-        label: rule.label, price: rule.price, unit: rule.unit,
+        label: rule.label, price: price, unit: unit,
         code: String(r.code == null ? '' : r.code).trim(), spec: spec,
-        qty: qty === '' ? '' : qty,
-        amt: qty === '' ? '' : pct(qty * rule.price)
+        qty: qty,
+        amt: qty === '' ? '' : pct(qty * price)
       });
     });
 
@@ -768,7 +792,8 @@
    * items（调用方从合并结果提取）：
    *   { d:'yyyy-mm-dd', bld, type, va(单块体积/面积值), wt(单体质量), src:'文件/表'(计车次) }
    * opts = { priceRules, blankBldLabel, splitType(默认true: 同日同楼栋不同构件类型拆成多行) }
-   * 计价规则与台账一致（首中即用）；金额 = 数量×含税单价，数量按规则的计量方式取 va。
+   * 计价规则与台账一致（首中即用，支持双价自动选）；金额 = 数量×含税单价，
+ * 数量优先按规则的计量方式取 vol/area，缺时若另一口径量价齐备自动改用。
    * 返回 { groups:[{date,bld,label,labels,cars,count,vol,wt,area,amt}], totals:{...}, warnings }
    * totals.cars = 去重后的实际送货单张数（不因拆类型重复计）
    */
@@ -809,17 +834,27 @@
         warnings.push('构件类型“' + (type || '(空)') + '”未匹配计价规则（' + bld + '），金额按 0 记');
         m = { rule: { label: type || '未分类', unit: '体积', price: 0 }, idx: 1e9 };
       }
-      // 取值口径：优先用调用方按语义分开给的 vol / area（缺失的那项可由尺寸推算）；
-      // 没给这两项时退回旧的单列 va，保证既有项目（如太和、尚谷大院）数值不变。
-      var raw = (m.rule.unit === '面积') ? it.area : it.vol;
-      var qty = (raw === undefined || raw === null || raw === '') ? num(it.va) : num(raw);
-      if (qty === null || qty < 0) {
-        qty = 0;
-        warnings.push('构件缺少' + (m.rule.unit === '面积' ? '面积' : '体积') + '：' + (it.src || '') + '（' + bld + '），按 0 计');
+      // 取值口径：优先用调用方按语义分开给的 vol / area；两项都没给时（老调用方只传 va）
+      // 退回旧口径：把 va 当作优先口径的数量，保证既有项目（如太和、尚谷大院）数值不变。
+      // 调用方给了 vol/area 时，缺的那项就是真的缺 —— 不再用尺寸推算、也不拿另一列的数顶替。
+      var vNum = (it.vol === undefined || it.vol === null || it.vol === '') ? null : num(it.vol);
+      var aNum = (it.area === undefined || it.area === null || it.area === '') ? null : num(it.area);
+      if (vNum !== null && vNum < 0) vNum = null;
+      if (aNum !== null && aNum < 0) aNum = null;
+      var hasSplit = (vNum !== null || aNum !== null);
+      var primVol = m.rule.unit !== '面积';
+      var qty = hasSplit ? (primVol ? vNum : aNum) : num(it.va);
+      /* v1.5.0 双价计价：优先口径缺数量（或未填该价）时，若另一口径的量与 price2 齐备则自动改用 */
+      var pr = pickPricing(m.rule, qty, hasSplit ? (primVol ? aNum : vNum) : null);
+      if (pr) { qty = pr.qty; }
+      else {
+        qty = (qty === null || qty < 0) ? 0 : qty;
+        warnings.push('构件缺少' + (m.rule.unit === '面积' ? '面积' : '体积') +
+          '且未填「' + (m.rule.unit === '面积' ? '体积' : '面积') + '」单价（可在计价规则里把两个价都填上）：' +
+          (it.src || '') + '（' + bld + '），按 0 计');
       }
       var wt = num(it.wt); if (wt === null || wt < 0) wt = 0;
-      // 体积/面积两列都尽量填：单价仍按规则的计量方式（rule.unit）算，但汇总表两栏都有数
-      // （源表缺的那一栏由调用方用尺寸推算）。调用方没给 vol/area 时退回旧口径。
+      // 体积/面积两列都尽量填（只填单据原值，缺的栏留空；老调用方 va-only 时按优先口径记一栏）
       var qVol = (it.vol === undefined || it.vol === null || it.vol === '') ? null : num(it.vol);
       var qArea = (it.area === undefined || it.area === null || it.area === '') ? null : num(it.area);
       if (qVol !== null && qVol < 0) qVol = null;
@@ -843,7 +878,7 @@
         if (qArea !== null) g.area += qArea;
       }
       g.wt += wt;
-      g.amt += qty * m.rule.price;
+      g.amt += pr ? qty * pr.price : 0;
       var src = clean(it.src);
       if (src) {
         if (!g.cars[src]) { g.cars[src] = 1; g.carN++; }
@@ -1014,6 +1049,7 @@
     toDateText: toDateText,
     clean: clean,
     merge: merge,
+    pickPricing: pickPricing,
     buildLedger: buildLedger,
     buildDailySummary: buildDailySummary,
     verifyTotals: verifyTotals,

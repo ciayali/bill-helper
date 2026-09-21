@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 v1.4.1 · 本地离线版</title>
+<title>账单合并工具 v1.5.0 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -146,7 +146,7 @@
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.4.1</b></span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.5.0</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
@@ -197,7 +197,7 @@
         <button id="btnBldClear" class="ghost" style="padding:2px 8px;">清空</button>
       </span><br>
       · <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
-          <input type="checkbox" id="deriveArea" checked> <b>面积/体积互为推算</b>：源表只有体积没有面积时，按「板长×板宽」推算面积（毛面积，不含扣减）；只有面积时按「面积×板厚」推算体积
+          <input type="checkbox" id="deriveArea"> <b>面积/体积互为推算</b>（默认<b>关</b>）：源表只有体积时按「板长×板宽」推算毛面积、只有面积时按「面积×板厚」推算体积。<b>异形板（开洞/缺口）的长×宽不是实际面积</b>，一般建议不勾——缺哪栏就空着，计价交给步骤 5 的双价规则
         </label>
     </div>
     <div class="toolbar">
@@ -256,24 +256,27 @@
         <span style="display:inline-flex;gap:6px;"><input type="date" id="lgFrom"><input type="date" id="lgTo"></span>
       </label>
     </div>
-    <div class="muted" style="margin:12px 0 4px;">计价规则（决定输出“产品名称 / 单块体积·面积 / 含税单价 / 含税金额”）；未匹配的类型按 0 元计入并在结果中提示，可点击“＋ 添加计价规则”补上。</div>
+    <div class="muted" style="margin:12px 0 4px;">计价规则（决定输出“产品名称 / 单块体积·面积 / 含税单价 / 含税金额”）：每个产品类型可<b>同时填「元/m³」和「元/m²」两个价</b>——优先按“计量方式”取数计价；单据里没有该数量时（比如只给了体积），自动改用另一口径的单价，<b>不再用长×宽推算面积</b>。未匹配的类型按 0 元计入并在结果中提示，可点击“＋ 添加计价规则”补上。</div>
     <table class="lgRules">
-      <thead><tr><th style="width:220px">产品名称</th><th>匹配关键词</th><th>排除词</th><th>计量方式</th><th>含税单价</th><th style="width:34px"></th></tr></thead>
+      <thead><tr><th style="width:190px">产品名称</th><th>匹配关键词</th><th>排除词</th><th>计量方式<br><small>（优先口径）</small></th><th>单价 元/m³<br><small>（按体积）</small></th><th>单价 元/m²<br><small>（按面积）</small></th><th style="width:34px"></th></tr></thead>
       <tbody id="lgRuleRows">
         <tr>
           <td><b>PC叠合板</b></td><td class="muted">叠合板</td><td class="muted">桁架</td>
           <td>体积 m³</td>
-          <td><input type="number" class="rulePrice" id="lgPrice0" value="2300" style="width:92px;"> 元/m³</td><td></td>
+          <td><input type="number" class="rulePrice" id="lgPrice0" value="2300" style="width:92px;"></td>
+          <td><input type="number" class="rulePrice2" id="lgPriceA0" value="" placeholder="留空=不启用" style="width:92px;"></td><td></td>
         </tr>
         <tr>
           <td><b>PC楼梯</b></td><td class="muted">楼梯</td><td class="muted">—</td>
           <td>体积 m³</td>
-          <td><input type="number" class="rulePrice" id="lgPrice1" value="2500" style="width:92px;"> 元/m³</td><td></td>
+          <td><input type="number" class="rulePrice" id="lgPrice1" value="2500" style="width:92px;"></td>
+          <td><input type="number" class="rulePrice2" id="lgPriceA1" value="" placeholder="留空=不启用" style="width:92px;"></td><td></td>
         </tr>
         <tr>
           <td><b>钢管桁架预应力叠合板</b></td><td class="muted">桁架</td><td class="muted">—</td>
           <td>面积 m²</td>
-          <td><input type="number" class="rulePrice" id="lgPrice2" value="160" style="width:92px;"> 元/m²</td><td></td>
+          <td><input type="number" class="rulePrice2" id="lgPriceV2" value="" placeholder="留空=不启用" style="width:92px;"></td>
+          <td><input type="number" class="rulePrice" id="lgPrice2" value="160" style="width:92px;"></td><td></td>
         </tr>
       </tbody>
     </table>
@@ -1121,20 +1124,23 @@ $('lgSeg').addEventListener('change', function(){
 
 /* 添加自定义计价规则 */
 $('btnAddRule').addEventListener('click', function(){
-  var rule={label:'', kwText:'', excludeText:'', unit:'体积', price:0};
+  var rule={label:'', kwText:'', excludeText:'', unit:'体积', price:0, price2:0};
   var tr=document.createElement('tr');
   tr.innerHTML='<td><input type="text" class="rName" placeholder="产品名称" style="width:170px;"></td>'+
-    '<td><input type="text" class="rKw" placeholder="如：叠合板（逗号分隔）" style="width:160px;"></td>'+
-    '<td><input type="text" class="rEx" placeholder="排除词(可空)" style="width:120px;"></td>'+
+    '<td><input type="text" class="rKw" placeholder="如：叠合板（逗号分隔）" style="width:150px;"></td>'+
+    '<td><input type="text" class="rEx" placeholder="排除词(可空)" style="width:110px;"></td>'+
     '<td><select class="rUnit"><option value="体积">体积 m³</option><option value="面积">面积 m²</option></select></td>'+
-    '<td><input type="number" class="rPrice" value="0" style="width:92px;"> 元</td>'+
+    '<td><input type="number" class="rPrice" value="0" title="优先口径的单价" style="width:92px;"></td>'+
+    '<td><input type="number" class="rPrice2" value="" placeholder="留空=不启用" title="另一口径的单价：优先口径缺数量时自动改用" style="width:92px;"></td>'+
     '<td><button class="ruleDel" title="删除">✕</button></td>';
   $('lgRuleRows').appendChild(tr);
   function sync(){ rule.label=tr.querySelector('.rName').value.trim();
     rule.kwText=tr.querySelector('.rKw').value;
     rule.excludeText=tr.querySelector('.rEx').value;
     rule.unit=tr.querySelector('.rUnit').value;
-    rule.price=parseFloat(tr.querySelector('.rPrice').value)||0; }
+    rule.price=parseFloat(tr.querySelector('.rPrice').value)||0;
+    var p2=tr.querySelector('.rPrice2').value;
+    rule.price2=(p2===''||isNaN(parseFloat(p2)))?0:parseFloat(p2); }
   tr.querySelectorAll('input,select').forEach(function(el){ el.addEventListener('input', sync); });
   tr.querySelector('.ruleDel').addEventListener('click', function(){
     tr.remove(); extraRules.splice(extraRules.indexOf(rule),1);
@@ -1145,7 +1151,8 @@ $('btnAddRule').addEventListener('click', function(){
 
 /* 取一行明细的「体积 / 面积」两个口径：
    - 源表那一列装的究竟是体积还是面积，由 core 写进 rowMeta.qty（按源表头判定）；
-   - 缺的另一项用尺寸推算（板长×板宽 → 毛面积；面积×板厚 → 体积），可用步骤3的开关关掉；
+   - v1.5.0 起「推算」默认关闭：缺的那一栏直接留空（只填单据原值），
+     计价缺口径由步骤 5 的双价规则解决（长×宽是毛面积，异形板不准）；
    - 判定不出语义时保持旧行为：两个口径都用同一个数（既有项目数值不变）。 */
 var derivedQtyCount=0;      // 本批有多少块用了推算（只用于提示，不影响计算）
 function rowQty(r, meta, idx, useDerive){
@@ -1155,15 +1162,19 @@ function rowQty(r, meta, idx, useDerive){
   var dims=(!isNaN(w) && !isNaN(l) && w>0 && l>0);
   var gross=dims ? Math.round((w/1000)*(l/1000)*10000)/10000 : null;   // 长×宽(m)，4 位小数
   var sem=(meta && meta.qty) || '';
-  if(!useDerive || !sem){ return { vol:hasVa?va:'', area:hasVa?va:'', derived:false }; }
+  if(!sem){ return { vol:hasVa?va:'', area:hasVa?va:'', derived:false }; }   // 语义不明：旧口径
+  if(!useDerive){                                   // 不推算：只填单据原值，缺的栏留空
+    return sem==='volume' ? { vol:hasVa?va:'', area:'', derived:false }
+                          : { vol:'', area:hasVa?va:'', derived:false };
+  }
   if(sem==='volume'){                       // 源表给的是体积 → 面积按长×宽推算
     var vol=hasVa?va:'';
     if(gross!==null) return { vol:vol, area:gross, derived:true };
-    return { vol:vol, area:hasVa?va:'', derived:false };
+    return { vol:vol, area:'', derived:false };
   }
   var area=hasVa?va:'';                     // 源表给的是面积 → 体积按 面积×板厚 推算
   if(area!=='' && !isNaN(h) && h>0) return { vol:Math.round(area*(h/1000)*10000)/10000, area:area, derived:true };
-  return { vol:hasVa?va:'', area:area, derived:false };
+  return { vol:'', area:area, derived:false };
 }
 
 /* 从合并结果构造 buildLedger 输入行 */
@@ -1209,10 +1220,11 @@ function buildLedgerRowsFromResult(){
 
 function collectPriceRules(){
   var p=function(id){ var v=parseFloat($(id).value); return isNaN(v)?0:v; };
+  var p2=function(id){ var el=$(id); if(!el) return 0; var v=parseFloat(el.value); return (isNaN(v)||v<=0)?0:v; };
   var rules=[
-    {label:'PC叠合板', kw:['叠合板'], exclude:['桁架'], unit:'体积', price:p('lgPrice0')},
-    {label:'PC楼梯',   kw:['楼梯'],   exclude:[],        unit:'体积', price:p('lgPrice1')},
-    {label:'钢管桁架预应力叠合板', kw:['桁架'], exclude:[], unit:'面积', price:p('lgPrice2')}
+    {label:'PC叠合板', kw:['叠合板'], exclude:['桁架'], unit:'体积', price:p('lgPrice0'), price2:p2('lgPriceA0')},
+    {label:'PC楼梯',   kw:['楼梯'],   exclude:[],        unit:'体积', price:p('lgPrice1'), price2:p2('lgPriceA1')},
+    {label:'钢管桁架预应力叠合板', kw:['桁架'], exclude:[], unit:'面积', price:p('lgPrice2'), price2:p2('lgPriceV2')}
   ];
   extraRules.forEach(function(r){
     if(!r || !r.label) return;
@@ -1220,7 +1232,7 @@ function collectPriceRules(){
       label:r.label,
       kw:(r.kwText||'').split(/[,，]/).map(function(s){return s.trim();}).filter(Boolean),
       exclude:(r.excludeText||'').split(/[,，]/).map(function(s){return s.trim();}).filter(Boolean),
-      unit:r.unit, price:r.price
+      unit:r.unit, price:r.price, price2:r.price2||0
     });
   });
   return rules;
