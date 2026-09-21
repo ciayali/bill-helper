@@ -6,7 +6,7 @@
   'use strict';
   var root = (typeof globalThis !== 'undefined') ? globalThis : global;
   var XLSX = root.XLSX;
-  var VERSION = '1.3.1';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
+  var VERSION = '1.4.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
   var BUILD_DATE = '2026-09-21';    // 本版本日期
 
   /* ---------------- 文本工具 ---------------- */
@@ -64,6 +64,69 @@
   }
 
   function round3(n) { return Math.round(n * 1000) / 1000; }
+
+  /*
+   * 「单块体积/面积」这类合并列的语义判定：按源表头文本判断这一列装的是体积还是面积。
+   * 台账/汇总据此把数值放进正确的一格（体积列或面积列），另一格缺失时再由尺寸推算。
+   * 返回 'volume' | 'area' | ''
+   */
+  function qtySemantics(text) {
+    var t = clean(text);
+    if (!t) return '';
+    if (/面积|平方|m2|m²/i.test(t)) return 'area';
+    if (/体积|方量|立方|m3|m³/i.test(t)) return 'volume';
+    return '';
+  }
+
+  /*
+   * 表头区（表头行之上）的“出库总量”标注。有些厂的出库单把总量印在页面顶部：
+   *   A4='出库总量' | D4='体积' | E4='57.716m³'   → 标签与数值分列
+   *   或 总块数：36块 / 总方量：6.806m³           → 同一格“标签：数值”
+   * 返回 {blocks, volume, area, weight, text} 或 null（解析不到值时返回 null，避免误报）
+   */
+  function findHeaderTotal(ws, headerRow) {
+    if (!headerRow || headerRow < 2) return null;
+    var rmax = Math.min(headerRow - 1, 12);
+    for (var r = 0; r < rmax; r++) {
+      var line = rowText(ws, r, 32);
+      if (!/出库总量|总块数|总数量|总方量|总体积|总面积|总重量/.test(line)) continue;
+      var eB = pickNum(line, /总块数[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+      var eV = pickNum(line, /总方量[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+      if (eV === null) eV = pickNum(line, /总体积[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+      var eA = pickNum(line, /总面积[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+      var eW = pickNum(line, /总重量[：:]?\s*([0-9]+(?:\.[0-9]+)?)/);
+      if (eB === null && eV === null && eA === null && eW === null) {
+        var cols = [];
+        for (var c = 0; c < 32; c++) {
+          var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+          cols.push(cell && cell.v !== null && cell.v !== undefined ? String(cell.v).trim() : '');
+        }
+        for (var i = 0; i < cols.length; i++) {
+          var lab = clean(cols[i]);
+          if (!lab) continue;
+          var kind = /块数|数量|件数/.test(lab) ? 'b'
+                   : /方量|体积/.test(lab) ? 'v'
+                   : /面积/.test(lab) ? 'a'
+                   : /重量|质量/.test(lab) ? 'w' : '';
+          if (!kind) continue;
+          for (var j = i + 1; j < cols.length && j <= i + 3; j++) {
+            var mm = String(cols[j]).match(/([0-9]+(?:\.[0-9]+)?)/);
+            if (!mm) continue;
+            var val = parseFloat(mm[1]);
+            if (kind === 'b' && eB === null) eB = val;
+            else if (kind === 'v' && eV === null) eV = val;
+            else if (kind === 'a' && eA === null) eA = val;
+            else if (kind === 'w' && eW === null) eW = val;
+            break;
+          }
+        }
+      }
+      if (eB !== null || eV !== null || eA !== null || eW !== null) {
+        return { blocks: eB, volume: eV, area: eA, weight: eW, text: line };
+      }
+    }
+    return null;
+  }
 
   // 比对“出库总量”标注值与明细合计，返回校核记录
   function buildVerify(source, exp, act) {
@@ -367,6 +430,15 @@
     var verify = [];          // 出库总量校核结果
     var dateColIdx = headers.indexOf('发货时间');
 
+    // 楼栋兜底：某些出库单表里没有“楼栋”列（楼栋只写在文件名里，如“…翔安一中12#出库单.xlsx”）。
+    // 只在某张表的“楼栋”列完全没匹配到时才填，不会覆盖表里已有的楼栋值。
+    var bldFallback = config.bldFallback || '';
+    function bldFallbackFor(fname) {
+      if (!bldFallback) return '';
+      if (typeof bldFallback === 'object') return clean(bldFallback[fname] || '');
+      return clean(bldFallback);
+    }
+
     // 在指定表里按“手动指定表头文本”精确找列
     function findByHeader(ws, headerRow, text) {
       var arr = headerTexts(ws, headerRow);
@@ -408,6 +480,21 @@
           warnings.push(fn + ' / ' + sn + ': 未匹配到任何数据列，已跳过');
           return;
         }
+
+        // ---- 「单块体积/面积」列的语义（体积 or 面积）----
+        // 源表可能只有体积列（如翔安一中出库单），而构件按面积计价；
+        // 这里记下语义，台账/汇总才能把数值放进正确的一格，并在缺另一项时用尺寸推算。
+        var qSem = '';
+        (function () {
+          for (var qi = 0; qi < dataCols.length; qi++) {
+            var nm = dataCols[qi].name;
+            if (/体积/.test(nm) && /面积/.test(nm) && map[nm]) {
+              qSem = qtySemantics(map[nm].text);
+              break;
+            }
+          }
+        })();
+        var bldFb = bldFallbackFor(fn);
 
         // ---- 日期解析方式 ----
         var dColIdx = -1;                 // 'col' 模式：本表里日期列位置
@@ -481,7 +568,7 @@
               continue;
             }
             var mm = map[hname];
-            if (!mm) { out.push(''); continue; }
+            if (!mm) { out.push((hname === '楼栋' && bldFb) ? bldFb : ''); continue; }
             var cell = ws[XLSX.utils.encode_cell({ r: r2, c: mm.idx })];
             var val = cell ? cell.v : null;
             if (val instanceof Date) val = fmtDate(val);
@@ -489,7 +576,7 @@
             out.push(val === null || val === undefined ? '' : val);
           }
           rows.push(out);
-          rowMeta.push({ file: fn, sheet: sn,
+          rowMeta.push({ file: fn, sheet: sn, qty: qSem,
             date: (dateColIdx >= 0 ? (out[dateColIdx] || '') : (baseDate || '')) });
           fileRows++;
           // 累计明细实际值，供出库总量校核
@@ -498,11 +585,16 @@
           if (sArea >= 0) { var na = cellNum(ws, r2, sArea); if (na !== null) actSum.area  += na; }
           if (sWt >= 0)   { var nw = cellNum(ws, r2, sWt);   if (nw !== null) actSum.weight += nw; }
         }
+        // 表里没有底部“出库总量”行时，再看表头区是否印了总量（如翔安一中出库单 A4/D4/E4）
+        if (!expSum) expSum = findHeaderTotal(ws, headerRow);
         if (expSum) verify.push(buildVerify(fn + ' / ' + sn, expSum, actSum));
         stats[fn] = (stats[fn] || 0) + fileRows;
         var missing = dataCols.filter(function (c) { return map[c.name] === null; }).map(function (c) { return c.name; });
         if (missing.length && fileRows > 0) {
           warnings.push(fn + ' / ' + sn + ': 未找到列 ' + missing.join('、') + '（留空）');
+        }
+        if (bldFb && fileRows > 0 && map['楼栋'] === null) {
+          warnings.push(fn + ' / ' + sn + ': 表内没有“楼栋”列，已用兜底值「' + bldFb + '」补齐（可在步骤3改/清空）');
         }
       });
     });
@@ -717,12 +809,21 @@
         warnings.push('构件类型“' + (type || '(空)') + '”未匹配计价规则（' + bld + '），金额按 0 记');
         m = { rule: { label: type || '未分类', unit: '体积', price: 0 }, idx: 1e9 };
       }
-      var qty = num(it.va);
+      // 取值口径：优先用调用方按语义分开给的 vol / area（缺失的那项可由尺寸推算）；
+      // 没给这两项时退回旧的单列 va，保证既有项目（如太和、尚谷大院）数值不变。
+      var raw = (m.rule.unit === '面积') ? it.area : it.vol;
+      var qty = (raw === undefined || raw === null || raw === '') ? num(it.va) : num(raw);
       if (qty === null || qty < 0) {
         qty = 0;
         warnings.push('构件缺少' + (m.rule.unit === '面积' ? '面积' : '体积') + '：' + (it.src || '') + '（' + bld + '），按 0 计');
       }
       var wt = num(it.wt); if (wt === null || wt < 0) wt = 0;
+      // 体积/面积两列都尽量填：单价仍按规则的计量方式（rule.unit）算，但汇总表两栏都有数
+      // （源表缺的那一栏由调用方用尺寸推算）。调用方没给 vol/area 时退回旧口径。
+      var qVol = (it.vol === undefined || it.vol === null || it.vol === '') ? null : num(it.vol);
+      var qArea = (it.area === undefined || it.area === null || it.area === '') ? null : num(it.area);
+      if (qVol !== null && qVol < 0) qVol = null;
+      if (qArea !== null && qArea < 0) qArea = null;
       var label = m.rule.label;
       var key = d + '\u0001' + bld + (splitType ? '\u0001' + label : '');
       var g = map[key];
@@ -735,7 +836,12 @@
       }
       if (!splitType && !g.labelSet[label]) { g.labelSet[label] = 1; g.labels.push(label); }
       g.count++;
-      if (m.rule.unit === '面积') g.area += qty; else g.vol += qty;
+      if (qVol === null && qArea === null) {
+        if (m.rule.unit === '面积') g.area += qty; else g.vol += qty;
+      } else {
+        if (qVol !== null) g.vol += qVol;
+        if (qArea !== null) g.area += qArea;
+      }
       g.wt += wt;
       g.amt += qty * m.rule.price;
       var src = clean(it.src);

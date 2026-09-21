@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 v1.3.1 · 本地离线版</title>
+<title>账单合并工具 v1.4.0 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -146,23 +146,25 @@
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.3.1</b></span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.4.0</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
 <main>
   <!-- 步骤1: 选文件 -->
   <div class="card">
-    <h2><span class="step-tag">1</span>选择文件<small>支持 .xlsx，可一次选多个、选整个文件夹、或拖进来（文件夹也可以拖）</small></h2>
+    <h2><span class="step-tag">1</span>选择文件<small>支持 .xlsx / .xlsm / .xls，可一次选多个、选整个文件夹、或拖进来（文件夹也可以拖）</small></h2>
     <div id="drop">
       <div style="font-size:15px;">📂 点击选择文件，或把 Excel 文件<b>拖到这里</b></div>
       <div class="muted" style="margin-top:4px;">程序会自动跳过上次的输出文件和以 ~$ 开头的临时文件</div>
+      <div class="muted" style="margin-top:4px;">拖拽没反应时：请从<b>资源管理器</b>拖（微信/QQ 聊天窗口里直接拖出来有时拿不到文件），或改用下面的按钮</div>
       <div style="margin-top:10px;">
         <button id="btnPickDir" class="ghost" title="选择一个文件夹，里面的所有货单 Excel 会自动导入（适合“一天一个文件夹”的货单管理）">📁 选择文件夹导入（含子文件夹里的货单）</button>
       </div>
     </div>
-    <input id="fileInput" type="file" accept=".xlsx" multiple style="display:none;">
+    <input id="fileInput" type="file" accept=".xlsx,.xlsm,.xls" multiple style="display:none;">
     <input id="dirInput" type="file" webkitdirectory multiple style="display:none;">
+    <div id="importHint"></div>
     <div id="fileList"></div>
   </div>
 
@@ -184,8 +186,20 @@
 
   <!-- 步骤3: 输出列与日期 -->
   <div class="card" id="cardMap" style="display:none;">
-    <h2><span class="step-tag">3</span>输出列 & 发货时间<small>以第一张被勾选的表作为“样例”推荐映射，可按需调整</small></h2>
+    <h2><span class="step-tag">3</span>输出列 &amp; 发货时间 &amp; 楼栋兜底<small>以第一张被勾选的表作为“样例”推荐映射，可按需调整；表里没有“楼栋”列时用下面的兜底值补齐</small></h2>
     <div id="mapWrap"></div>
+    <div class="notice" style="margin-top:10px;">
+      <b>识别兜底</b>（都不动表里已有的值，只在“缺列”时生效）：<br>
+      · <b>楼栋</b>：有些出库单表里根本没有“楼栋”列（楼栋只写在文件名里，比如“20260807-翔安一中12#出库单.xlsx”）。
+      这里填的值只在某张表<b>完全没匹配到“楼栋”列</b>时用来补齐；留空＝不补。
+      <span style="display:inline-flex;align-items:center;gap:6px;margin-left:6px;">
+        <input type="text" id="bldFallback" placeholder="如 12#" style="width:110px;">
+        <button id="btnBldClear" class="ghost" style="padding:2px 8px;">清空</button>
+      </span><br>
+      · <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
+          <input type="checkbox" id="deriveArea" checked> <b>面积/体积互为推算</b>：源表只有体积没有面积时，按「板长×板宽」推算面积（毛面积，不含扣减）；只有面积时按「面积×板厚」推算体积
+        </label>
+    </div>
     <div class="toolbar">
       <button id="btnAddCol" class="ghost">＋ 添加自定义输出列</button>
       <button id="btnResetMap" class="ghost">恢复默认推荐</button>
@@ -347,7 +361,8 @@ var TPL = ['序号','发货时间','构件编号','楼栋','楼层','构件类�
 
 var state = { books: [], sample: null }; // sample = {fn, sn, ws, headerRow}
 /* 诊断/自动化测试钩子（正常使用无影响；函数声明有提升，此处可直接引用） */
-window.__testHooks = { state: state, handleFiles: handleFiles, buildConfig: buildConfig, exportWithAttach: exportWithAttach };
+window.__testHooks = { state: state, handleFiles: handleFiles, buildConfig: buildConfig, exportWithAttach: exportWithAttach,
+                       bldFromFileName: bldFromFileName, rowQty: rowQty };
 
 var $ = function(id){ return document.getElementById(id); };
 
@@ -378,12 +393,23 @@ $('dirInput').addEventListener('change', function(){ handleFiles($('dirInput').f
 drop.addEventListener('drop', function(e){
   var dt = e.dataTransfer;
   var items = dt && dt.items;
-  function fallback(){ handleFiles(dt.files); }
-  if(!items || !items.length || !items[0].webkitGetAsEntry){ fallback(); return; }
-  var files = [], pending = 0, started = false, finished = false;
-  function done(){
-    if(started && !finished && pending === 0){ finished = true; handleFiles(files); }
+  var files = [], seen = {}, pending = 0, started = false, finished = false;
+  // 两条通道都收：① dataTransfer.files（真实文件，从资源管理器拖/点击选择都是这条）
+  //                ② webkitGetAsEntry（只有它能递归读“文件夹”）
+  // 之前只走②，凡是拿不到 entry 的拖拽（部分来源的虚拟文件、非 Chrome 内核的拖放）就一个文件都收不到。
+  function addFile(f){
+    if(!f) return;
+    var k = String(f.name || '') + '|' + (f.size || 0);
+    if(seen[k]) return;
+    seen[k] = 1;
+    files.push(f);
   }
+  function done(){
+    if(finished || pending > 0) return;
+    finished = true;
+    handleFiles(files);
+  }
+  if(dt && dt.files){ for(var k = 0; k < dt.files.length; k++) addFile(dt.files[k]); }
   function walkDir(dir, depth){
     if(depth > 6) return;                       // 目录层级保护
     pending++;
@@ -394,7 +420,7 @@ drop.addEventListener('drop', function(e){
         entries.forEach(function(en){
           if(en.isFile){
             pending++;
-            en.file(function(f){ files.push(f); pending--; done(); }, function(){ pending--; done(); });
+            en.file(function(f){ addFile(f); pending--; done(); }, function(){ pending--; done(); });
           } else if(en.isDirectory){
             walkDir(en, depth + 1);
           }
@@ -410,15 +436,25 @@ drop.addEventListener('drop', function(e){
     started = true;
     if(entry.isFile){
       pending++;
-      entry.file(function(f){ files.push(f); pending--; done(); }, function(){ pending--; done(); });
+      entry.file(function(f){ addFile(f); pending--; done(); }, function(){ pending--; done(); });
     } else if(entry.isDirectory){
       walkDir(entry, 0);
     }
   }
-  if(!started) fallback();                      // 拿不到 entry（老浏览器）→ 按普通文件处理
+  // 没有任何 entry（老浏览器 / 虚拟文件拖放）→ 直接用第 ① 步收到的真实文件；
+  // 若两条通道都空，handleFiles 会给出“没拿到文件”的红色提示。
+  if(!started){ setTimeout(function(){ if(!finished) done(); }, 0); }
 });
 
 fileInput.addEventListener('change', function(){ handleFiles(fileInput.files); fileInput.value=''; });
+
+/* 楼栋兜底：用户手动改过就标记，之后自动推断不再覆盖 */
+(function(){
+  var el=$('bldFallback');
+  if(el) el.addEventListener('input', function(){ bldFbTouched=true; });
+  var c=$('btnBldClear');
+  if(c) c.addEventListener('click', function(){ bldFbTouched=true; if(el) el.value=''; toast('已清空楼栋兜底值（合并时不再补齐楼栋）'); });
+})();
 
 /* ---------- 重新开始（清空已加载文件，回到选文件界面） ---------- */
 function resetAll(){
@@ -433,6 +469,9 @@ function resetAll(){
   if($('lgOutName')) $('lgOutName').value=DEF_OUT_LEDGER;
   if($('lgTitle')) $('lgTitle').value=DEF_LG_TITLE;
   if($('sumOutName')) $('sumOutName').value=DEF_OUT_SUM;
+  if($('bldFallback')) $('bldFallback').value='';
+  bldFbTouched=false;
+  (function(){ var h=$('importHint'); if(h){ h.style.display='none'; h.innerHTML=''; } })();
   autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER, t:DEF_LG_TITLE, s:DEF_OUT_SUM };
   // DOM 复位到初始状态
   drop.style.display='';
@@ -465,15 +504,38 @@ function resetAll(){
 }
 $('btnRestart').addEventListener('click', resetAll);
 
+/* 一个文件都没能进入处理列表时，逐条列出“被跳过的条目 + 原因”，并给出可操作的下一步。
+   （旧版只弹一句“没有可处理的 .xlsx 文件”，用户看不出是被筛掉了还是拖拽没带出文件） */
+function showImportHint(list){
+  var hint=$('importHint'); if(!hint) return;
+  hint.style.display='block';
+  hint.style.cssText='display:block;background:#fdecec;border:1px solid #f3b7b7;border-radius:8px;padding:10px 12px;margin-top:10px;font-size:13px;line-height:1.7;';
+  hint.innerHTML='<b>没有可用文件：</b>下面这些条目都没能进入处理列表——<br>'+
+    (list && list.length
+      ? list.slice(0,15).map(function(s){ return '· '+esc(s); }).join('<br>')+(list.length>15?'<br>· …共 '+list.length+' 项':'')
+      : '· 这次拖拽没有带出任何文件（常见于从微信/QQ 聊天窗口直接拖）')+
+    '<br><br><b>怎么办：</b><br>'+
+    '· 拖的是<b>文件夹</b>？请点上面的「📁 选择文件夹导入（含子文件夹里的货单）」<br>'+
+    '· 从<b>微信/QQ 聊天窗口</b>直接拖出来的？请先把文件另存到本地（或打开微信缓存目录），再从资源管理器拖进来<br>'+
+    '· 或者直接点虚线框，用「选择文件」按钮选<br>'+
+    '· 支持 .xlsx / .xlsm / .xls；文件名含“合并/汇总”或以 ~$ 开头的会被当作输出/临时文件跳过';
+  toast('没有可处理的文件，请看步骤 1 的红色提示');
+}
+
 function handleFiles(fl){
-  var skipped=[], seenName={};
+  var skipped=[], seenName={}, dup=0;
   var arr=[].slice.call(fl).filter(function(f){
-    if(!/\.xlsx$/i.test(f.name) || /^~\$/.test(f.name) || /合并|汇总/.test(f.name)){ skipped.push(f.name); return false; }
-    if(seenName[f.name]) return false;          // 文件夹导入时同名文件只取第一个
-    seenName[f.name]=1;
+    var nm=String((f && f.name) || '');
+    if(!nm){ skipped.push('（无名条目）—— 拖拽来源没提供文件名，请从资源管理器拖或用「选择文件」'); return false; }
+    if(!/\.(xlsx|xlsm|xls)$/i.test(nm)){ skipped.push(nm+' —— 不是 Excel 文件（支持 .xlsx/.xlsm/.xls）'); return false; }
+    if(/^~\$/.test(nm)){ skipped.push(nm+' —— Excel 临时文件'); return false; }
+    if(/合并|汇总/.test(nm)){ skipped.push(nm+' —— 上次的输出文件（已自动排除）'); return false; }
+    if(seenName[nm]){ dup++; return false; }     // 文件夹导入时同名文件只取第一个
+    seenName[nm]=1;
     return true;
   });
-  if(!arr.length){ alert('没有可处理的 .xlsx 文件（已自动排除“合并/汇总”输出文件与临时文件）。'); return; }
+  if(!arr.length){ showImportHint(fl && fl.length ? skipped : []); return; }
+  var hint=$('importHint'); if(hint){ hint.style.display='none'; hint.innerHTML=''; }
   if(skipped.length){ toast('已跳过 '+skipped.length+' 个非货单文件（输出/临时/非 Excel）'); }
   var todo=arr.length, done=0;
   arr.forEach(function(f){
@@ -513,6 +575,7 @@ function afterLoad(){
   renderMapping();
   cardMap.style.display='block';
   autoOutNames();
+  autoBldFallback();
 }
 
 /* ---------- 导出文件名/台账标题默认跟随导入文件命名 ---------- */
@@ -523,7 +586,7 @@ var autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER, t:DEF_LG_TITLE, s:DEF_OUT_SUM
 /* 从已导入文件名推一个公共基名：
    单文件=去掉 .xlsx 的文件名；多文件=最长公共前缀（去掉尾部分隔符/编号），推不出则返回 '' */
 function importBaseName(){
-  var names=state.books.map(function(b){ return (b.fileName||'').replace(/\.xlsx$/i,''); }).filter(Boolean);
+  var names=state.books.map(function(b){ return (b.fileName||'').replace(/\.(xlsx|xlsm|xls)$/i,''); }).filter(Boolean);
   if(!names.length) return '';
   if(names.length===1) return names[0];
   var pre=names[0];
@@ -544,6 +607,27 @@ function projectName(){
   t=t.replace(/[\s#\-—－_,，、.·()（）0-9]+$/,'');
   if(!/[\u4e00-\u9fa5]/.test(t)) return '';   // 至少含一个汉字才当成项目名（demo/英文文件名不算）
   return t.length>=2 ? t : '';
+}
+/* 从文件名里猜“楼栋”（如“20260807-翔安一中12#出库单”→ 12#，“A3#2层送货单”→ A3#）：
+   只认“数字（可带 - 连接，可带字母前缀）+#”；文件名里出现多个不同楼栋时视为歧义，返回 ''
+   ——宁可不猜，也不能把 3#、4# 合成一个楼栋。 */
+function bldFromFileName(){
+  var names=state.books.map(function(b){ return (b.fileName||'').replace(/\.(xlsx|xlsm|xls)$/i,''); });
+  var seen={}, uniq=[];
+  names.forEach(function(n){
+    var re=/([A-Za-z]{0,2}[0-9]+(?:[-–—][0-9]+)*\s*[#＃])/g, m;
+    while((m=re.exec(n))){
+      var v=m[1].replace(/\s+/g,'');
+      if(!seen[v]){ seen[v]=1; uniq.push(v); }
+    }
+  });
+  return uniq.length===1 ? uniq[0] : '';
+}
+var bldFbTouched=false;      // 用户手动改过兜底值后，不再被自动逻辑覆盖
+function autoBldFallback(){
+  var el=$('bldFallback'); if(!el || bldFbTouched) return;
+  var v=bldFromFileName();
+  if(v) el.value=v;
 }
 function autoOutNames(){
   var base=importBaseName();
@@ -809,7 +893,9 @@ function buildConfig(){
     });
   });
   var files=state.books.map(function(b){ return {name:b.fileName, wb:b.wb, buf:b.raw}; });
-  return { files:files, sheets:sheets, cols:cols };
+  var bf=$('bldFallback');
+  return { files:files, sheets:sheets, cols:cols,
+           bldFallback:(bf && bf.value ? bf.value.trim() : '') };
 }
 
 function readDateMode(){
@@ -883,7 +969,7 @@ btnMerge.addEventListener('click', function(){
 });
 
 /* ---------- 导出时附带原始货单 ----------
- * v1.3.1：不再把原始单转成纯数据，而是用 ExcelJS 把每张已勾选的原始单
+ * 现在不再把原始单转成纯数据，而是用 ExcelJS 把每张已勾选的原始单
  * 按原格式整表复制进导出工作簿（字体/边框/填充/数字格式/合并单元格/
  * 列宽/行高/冻结窗格/计算公式全部保留），即“把所有表格合并到一个工作簿”。
  * ExcelJS 缺失或复制失败时，自动退回纯数据附加方式并提示，不会导致导出失败。
@@ -1053,6 +1139,29 @@ $('btnAddRule').addEventListener('click', function(){
   sync();
 });
 
+/* 取一行明细的「体积 / 面积」两个口径：
+   - 源表那一列装的究竟是体积还是面积，由 core 写进 rowMeta.qty（按源表头判定）；
+   - 缺的另一项用尺寸推算（板长×板宽 → 毛面积；面积×板厚 → 体积），可用步骤3的开关关掉；
+   - 判定不出语义时保持旧行为：两个口径都用同一个数（既有项目数值不变）。 */
+var derivedQtyCount=0;      // 本批有多少块用了推算（只用于提示，不影响计算）
+function rowQty(r, meta, idx, useDerive){
+  function g(i){ return (i>=0 && i<r.length) ? r[i] : ''; }
+  var va=parseFloat(g(idx.va)), hasVa=!isNaN(va);
+  var w=parseFloat(g(idx.w)), l=parseFloat(g(idx.l)), h=parseFloat(g(idx.h));
+  var dims=(!isNaN(w) && !isNaN(l) && w>0 && l>0);
+  var gross=dims ? Math.round((w/1000)*(l/1000)*10000)/10000 : null;   // 长×宽(m)，4 位小数
+  var sem=(meta && meta.qty) || '';
+  if(!useDerive || !sem){ return { vol:hasVa?va:'', area:hasVa?va:'', derived:false }; }
+  if(sem==='volume'){                       // 源表给的是体积 → 面积按长×宽推算
+    var vol=hasVa?va:'';
+    if(gross!==null) return { vol:vol, area:gross, derived:true };
+    return { vol:vol, area:hasVa?va:'', derived:false };
+  }
+  var area=hasVa?va:'';                     // 源表给的是面积 → 体积按 面积×板厚 推算
+  if(area!=='' && !isNaN(h) && h>0) return { vol:Math.round(area*(h/1000)*10000)/10000, area:area, derived:true };
+  return { vol:hasVa?va:'', area:area, derived:false };
+}
+
 /* 从合并结果构造 buildLedger 输入行 */
 function buildLedgerRowsFromResult(){
   var H={};
@@ -1060,8 +1169,12 @@ function buildLedgerRowsFromResult(){
   function I(n){ return (n in H)? H[n] : -1; }
   var iCode=I('构件编号'), iBld=I('楼栋'), iFl=I('楼层'), iType=I('构件类型'),
       iD=(I('发货时间')>=0? I('发货时间') : I('发货日期')),
-      iVA=I('单块体积/面积'),  // 体积与面积合并为一列；按构件类型决定走体积还是面积
+      iVA=I('单块体积/面积'),  // 体积与面积合并为一列；语义由 rowMeta.qty 说明
       iW=I('板宽(mm)'), iL=I('板长(mm)'), iH=I('板厚(mm)');
+  var idx={ va:iVA, w:iW, l:iL, h:iH };
+  var useDerive=!$('deriveArea') || $('deriveArea').checked;
+  var metaAll=lastResult.rowMeta||[];
+  derivedQtyCount=0;
   function g(r,i){ return (i>=0 && i<r.length) ? r[i] : ''; }
   function shiftD(d,o){
     if(!o) return d;
@@ -1071,7 +1184,7 @@ function buildLedgerRowsFromResult(){
   var off=parseInt($('lgDayOff').value,10)||0;
   var fromV=$('lgFrom').value, toV=$('lgTo').value;
   var rows=[];
-  lastResult.rows.forEach(function(r){
+  lastResult.rows.forEach(function(r,ri){
     var code=BM.clean(g(r,iCode)), type=BM.clean(g(r,iType)), bld=BM.clean(g(r,iBld));
     if(!code && !type && !bld) return;                    // 空白行
     var d=BM.toDateText(g(r,iD));
@@ -1079,11 +1192,12 @@ function buildLedgerRowsFromResult(){
     if(d && off) d=shiftD(d,off);
     if(d && fromV && d<fromV) return;
     if(d && toV && d>toV) return;
-    var va=parseFloat(g(r,iVA));
+    var q=rowQty(r, metaAll[ri], idx, useDerive);
+    if(q.derived) derivedQtyCount++;
     rows.push({
       d:d, bld:g(r,iBld), fl:g(r,iFl), type:g(r,iType), code:g(r,iCode),
       w:parseFloat(g(r,iW)), l:parseFloat(g(r,iL)), h:parseFloat(g(r,iH)),
-      vol:va, area:va  // 同源: 按 priceRule.unit 选 vol 或 area
+      vol:q.vol, area:q.area   // 两格分别按语义取，缺的一格由尺寸推算
     });
   });
   return rows;
@@ -1119,6 +1233,10 @@ function doLedger(){
   var title=($('lgTitle').value||'').trim()||DEF_LG_TITLE;
   var out=BM.buildLedger(rows, { title:title, priceRules:collectPriceRules(), segment:segment });
   ledgerOut=out;
+  if(derivedQtyCount && out.warnings){
+    out.warnings.unshift('其中 '+derivedQtyCount+' 块构件的「体积/面积」是由尺寸推算的（源表缺该列），'+
+      '口径为 板长×板宽（毛面积）；若与合同口径不一致，可在步骤 3「识别兜底」里关掉推算');
+  }
   if(!out.pages.length){
     lgResultBox.style.display='block';
     lgStatsBox.innerHTML='';
@@ -1214,17 +1332,24 @@ function buildSummaryItems(){
   var iCode=I('构件编号'), iBld=I('楼栋'), iType=I('构件类型'),
       iVA=I('单块体积/面积'), iWt=I('单体质量'),
       iD=(I('发货时间')>=0? I('发货时间') : I('发货日期'));
+  var idx={ va:iVA, w:I('板宽(mm)'), l:I('板长(mm)'), h:I('板厚(mm)') };
+  var useDerive=!$('deriveArea') || $('deriveArea').checked;
   var meta=lastResult.rowMeta||[];
+  derivedQtyCount=0;
   function g(r,i){ return (i>=0 && i<r.length) ? r[i] : ''; }
   var items=[];
   lastResult.rows.forEach(function(r,ri){
     var code=BM.clean(g(r,iCode)), type=BM.clean(g(r,iType)), bld=BM.clean(g(r,iBld));
     if(!code && !type && !bld) return;                    // 空白行
     var m=meta[ri]||{};
+    var q=rowQty(r, m, idx, useDerive);
+    if(q.derived) derivedQtyCount++;
     items.push({
       d: BM.toDateText(g(r,iD)),
       bld: g(r,iBld), type: g(r,iType),
-      va: parseFloat(g(r,iVA)), wt: parseFloat(g(r,iWt)),
+      vol: q.vol, area: q.area,          // 按语义分开给；台账/汇总各取所需
+      va: parseFloat(g(r,iVA)),          // 兼容字段：语义判不出时 core 会退回用它
+      wt: parseFloat(g(r,iWt)),
       src: (m.file||'?')+' / '+(m.sheet||'?')
     });
   });
@@ -1239,6 +1364,10 @@ function doSummary(){
   var splitType=$('sumSplit') ? $('sumSplit').checked : true;
   var out=BM.buildDailySummary(items, { priceRules: collectPriceRules(), splitType: splitType });
   summaryOut=out;
+  if(derivedQtyCount && out.warnings){
+    out.warnings.unshift('其中 '+derivedQtyCount+' 块构件的「体积/面积」是由尺寸推算的（源表缺该列），'+
+      '口径为 板长×板宽（毛面积）；若与合同口径不一致，可在步骤 3「识别兜底」里关掉推算');
+  }
   sumResultBox.style.display='block';
   // 统计
   var t=out.totals;
