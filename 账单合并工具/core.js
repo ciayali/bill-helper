@@ -6,7 +6,8 @@
   'use strict';
   var root = (typeof globalThis !== 'undefined') ? globalThis : global;
   var XLSX = root.XLSX;
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
+  var BUILD_DATE = '2026-09-21';    // 本版本日期
 
   /* ---------------- 文本工具 ---------------- */
 
@@ -704,6 +705,7 @@
   /* ---------------- 导出接口 ---------------- */
   var api = {
     VERSION: VERSION,
+    BUILD_DATE: BUILD_DATE,
     loadWorkbook: loadWorkbook,
     previewGrid: previewGrid,
     detectHeaderRow: detectHeaderRow,

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 · 本地离线版</title>
+<title>账单合并工具 v1.1.0 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -126,7 +126,7 @@
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · v1.0</span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.1.0</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
@@ -193,8 +193,8 @@
   <div class="card" id="cardLedger" style="display:none;">
     <h2><span class="step-tag">5</span>由合并结果生成“供货明细台账”<small>按楼栋分页，叠合板/楼梯/桁架板自动计价；同一天同类构件合并一个小计；楼栋为空的明细归入「未填楼栋」页</small></h2>
     <div class="lgGrid">
-      <label class="lgItem">台账标题
-        <input type="text" id="lgTitle" value="百德·尚谷大院预制构件供货明细" style="width:330px;">
+      <label class="lgItem">台账标题<small style="font-weight:400;color:#6a7686;">（自动跟随导入文件名里的项目名，可改）</small>
+        <input type="text" id="lgTitle" value="预制构件供货明细" style="width:330px;">
       </label>
       <label class="lgItem">分段方式
         <select id="lgSeg">
@@ -239,8 +239,8 @@
     <div style="margin-top:6px;"><button id="btnAddRule" class="ghost">＋ 添加计价规则</button></div>
     <div class="toolbar" style="margin-top:12px;">
       <button id="btnLedger">生成台账预览</button>
-      <label class="muted">导出文件名
-        <input type="text" id="lgOutName" value="百德·尚谷大院供货明细台账.xlsx" style="width:240px;">
+      <label class="muted">导出文件名<small>（默认跟随导入文件名，可修改）</small>
+        <input type="text" id="lgOutName" value="供货明细台账.xlsx" style="width:240px;">
       </label>
     </div>
     <div id="lgResult" style="display:none;">
@@ -288,6 +288,16 @@ var drop=$('drop'), fileInput=$('fileInput'), fileList=$('fileList'),
     cardMap=$('cardMap'), mapWrap=$('mapWrap'),
     btnMerge=$('btnMerge'), resultBox=$('result'), btnExport=$('btnExport');
 
+/* ---------- 版本号（唯一来源：core.js 的 VERSION / BUILD_DATE） ---------- */
+var APP_VER=(BM.VERSION||'1.0.0'), APP_DATE=(BM.BUILD_DATE||'');
+(function(){
+  var hv=$('hdrVer'); if(hv) hv.textContent='v'+APP_VER;
+  var ft=$('footerTxt');
+  if(ft) ft.textContent='版本 v'+APP_VER+(APP_DATE?'（'+APP_DATE+'）':'')+
+    ' · 数据完全在本地浏览器中处理，不上传任何文件。用完后直接关闭本页即可。';
+  try{ document.title='账单合并工具 v'+APP_VER+' · 本地离线版'; }catch(_){}
+})();
+
 /* ---------- 文件选择 ---------- */
 drop.addEventListener('click', function(){ fileInput.click(); });
 ['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev, function(e){e.preventDefault();drop.classList.add('drag');}); });
@@ -303,10 +313,11 @@ function resetAll(){
   state.books=[]; state.sample=null;
   colOverrides={}; extraCols=[];
   lastResult=null; window.__lastResult=null;
-  // 导出文件名恢复为通用默认（文件清空后不再有可跟随的导入名）
+  // 导出文件名/台账标题恢复为通用默认（文件清空后不再有可跟随的导入名）
   if($('outName')) $('outName').value=DEF_OUT_MERGED;
   if($('lgOutName')) $('lgOutName').value=DEF_OUT_LEDGER;
-  autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER };
+  if($('lgTitle')) $('lgTitle').value=DEF_LG_TITLE;
+  autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER, t:DEF_LG_TITLE };
   // DOM 复位到初始状态
   drop.style.display='';
   fileList.style.display='none';
@@ -370,9 +381,11 @@ function afterLoad(){
   autoOutNames();
 }
 
-/* ---------- 导出文件名默认跟随导入文件命名 ---------- */
-var DEF_OUT_MERGED='发货明细汇总.xlsx', DEF_OUT_LEDGER='百德·尚谷大院供货明细台账.xlsx';
-var autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER };  // 最近一次自动填充的值
+/* ---------- 导出文件名/台账标题默认跟随导入文件命名 ---------- */
+/* 注意：默认值里一律不写具体项目名（曾写死“百德·尚谷大院”，换项目时会误导） */
+var DEF_OUT_MERGED='发货明细汇总.xlsx', DEF_OUT_LEDGER='供货明细台账.xlsx',
+    DEF_LG_TITLE='预制构件供货明细';
+var autoLast={ m:DEF_OUT_MERGED, l:DEF_OUT_LEDGER, t:DEF_LG_TITLE };  // 最近一次自动填充的值
 /* 从已导入文件名推一个公共基名：
    单文件=去掉 .xlsx 的文件名；多文件=最长公共前缀（去掉尾部分隔符/编号），推不出则返回 '' */
 function importBaseName(){
@@ -388,19 +401,31 @@ function importBaseName(){
   pre=pre.replace(/[\s#\-—－,，、.·()（）0-9]+$/,'');
   return pre.length>=2 ? pre : '';
 }
+/* 从导入文件名里推“项目名”，用于台账标题（如“尚古大院2-1,2-2#发货单”→ “尚古大院”）：
+   先砍掉“发货单/出库单/…台账”这类单据字样及其后内容，再去掉尾部编号/分隔符，推不出则返回 '' */
+function projectName(){
+  var base=importBaseName();
+  if(!base) return '';
+  var t=base.replace(/(发货单|出库单|送货单|发货明细|送货明细|对账单|结算单|供货明细|台账|明细表?|清单|汇总).*$/,'');
+  t=t.replace(/[\s#\-—－_,，、.·()（）0-9]+$/,'');
+  if(!/[\u4e00-\u9fa5]/.test(t)) return '';   // 至少含一个汉字才当成项目名（demo/英文文件名不算）
+  return t.length>=2 ? t : '';
+}
 function autoOutNames(){
   var base=importBaseName();
   var m=base ? base+'-合并明细.xlsx'     : DEF_OUT_MERGED;
   var l=base ? base+'-供货明细台账.xlsx' : DEF_OUT_LEDGER;
-  [ ['outName',m,'m'], ['lgOutName',l,'l'] ].forEach(function(it){
+  var pn=projectName();
+  var t=pn ? pn+'预制构件供货明细' : DEF_LG_TITLE;
+  [ ['outName',m,'m'], ['lgOutName',l,'l'], ['lgTitle',t,'t'] ].forEach(function(it){
     var el=$(it[0]); if(!el) return;
-    var v=el.value.trim();
+    var v=String(el.value||'').trim();
     // 当前值仍是默认值或上次自动值（=用户没手改过）才更新，避免覆盖用户输入
-    if(!v || v===DEF_OUT_MERGED || v===DEF_OUT_LEDGER || v===autoLast[it[2]]){
+    if(!v || v===DEF_OUT_MERGED || v===DEF_OUT_LEDGER || v===DEF_LG_TITLE || v===autoLast[it[2]]){
       el.value=it[1];
     }
   });
-  autoLast={ m:m, l:l };
+  autoLast={ m:m, l:l, t:t };
 }
 
 /* ---------- 步骤2: 文件/工作表清单 ---------- */
@@ -728,7 +753,8 @@ $('btnAgain').addEventListener('click', function(){ resultBox.style.display='non
 
 /* ================= 步骤5: 由合并结果生成台账 ================= */
 var cardLedger=$('cardLedger'), lgResultBox=$('lgResult'), lgWarnBox=$('lgWarn'),
-    lgStatsBox=$('lgStats'), lgPageSel=$('lgPageSel'), lgPreviewWrap=$('lgPreviewWrap');
+    lgStatsBox=$('lgStats'), lgPageSel=$('lgPageSel'), lgPreviewWrap=$('lgPreviewWrap'),
+    lgPageInfo=$('lgPageInfo');   // 以前靠浏览器"id 自动全局变量"侥幸可用，这里显式声明
 var ledgerOut=null;      // {pages, warnings}
 var extraRules=[];       // 用户自定义计价规则 {label,kw[],exclude[],unit,price}
 
@@ -823,7 +849,7 @@ function doLedger(){
   var segMode=$('lgSeg').value;
   var segment={mode:segMode};
   if(segMode==='cutday') segment.cutDay=parseInt($('lgCutDay').value,10)||26;
-  var title=($('lgTitle').value||'').trim()||'预制构件供货明细';
+  var title=($('lgTitle').value||'').trim()||DEF_LG_TITLE;
   var out=BM.buildLedger(rows, { title:title, priceRules:collectPriceRules(), segment:segment });
   ledgerOut=out;
   if(!out.pages.length){
