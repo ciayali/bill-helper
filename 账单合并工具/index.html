@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 v1.2.0 · 本地离线版</title>
+<title>账单合并工具 v1.3.0 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -146,19 +146,23 @@
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.2.0</b></span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.3.0</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
 <main>
   <!-- 步骤1: 选文件 -->
   <div class="card">
-    <h2><span class="step-tag">1</span>选择文件<small>支持 .xlsx，可一次选多个或拖进来</small></h2>
+    <h2><span class="step-tag">1</span>选择文件<small>支持 .xlsx，可一次选多个、选整个文件夹、或拖进来（文件夹也可以拖）</small></h2>
     <div id="drop">
       <div style="font-size:15px;">📂 点击选择文件，或把 Excel 文件<b>拖到这里</b></div>
       <div class="muted" style="margin-top:4px;">程序会自动跳过上次的输出文件和以 ~$ 开头的临时文件</div>
+      <div style="margin-top:10px;">
+        <button id="btnPickDir" class="ghost" title="选择一个文件夹，里面的所有货单 Excel 会自动导入（适合“一天一个文件夹”的货单管理）">📁 选择文件夹导入（含子文件夹里的货单）</button>
+      </div>
     </div>
     <input id="fileInput" type="file" accept=".xlsx" multiple style="display:none;">
+    <input id="dirInput" type="file" webkitdirectory multiple style="display:none;">
     <div id="fileList"></div>
   </div>
 
@@ -195,6 +199,9 @@
       <button id="btnMerge">合并并预览</button>
       <label class="muted">导出文件名<small>（默认跟随导入文件名，可修改）</small>
         <input type="text" id="outName" value="发货明细汇总.xlsx" style="width:190px;">
+      </label>
+      <label class="muted" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="勾选后，导出的工作簿会附上所有已勾选原始货单（每张单一个工作表）">
+        <input type="checkbox" class="srcAttach" checked> 附带原始货单
       </label>
     </div>
     <div id="result">
@@ -271,6 +278,9 @@
         <select id="lgPageSel"></select>
         <span id="lgPageInfo" class="muted"></span>
         <button id="btnLedgerExport">⬇ 导出台账 Excel</button>
+        <label class="muted" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="勾选后，导出的工作簿会附上所有已勾选原始货单（每张单一个工作表）">
+          <input type="checkbox" class="srcAttach" checked> 附带原始货单
+        </label>
       </div>
       <div id="lgPreviewWrap"></div>
     </div>
@@ -278,9 +288,12 @@
 
   <!-- 步骤6: 当天单楼栋发货汇总 & 对账校核 -->
   <div class="card" id="cardSummary" style="display:none;">
-    <h2><span class="step-tag">6</span>当天单楼栋发货汇总 &amp; 对账校核<small>按“发货日期 × 楼栋”汇总出库数据（车次/件数/方量/重量/面积/金额），可与对账单汇总页的合计逐项核对</small></h2>
+    <h2><span class="step-tag">6</span>当天单楼栋发货汇总 &amp; 对账校核<small>按“发货日期 × 楼栋 × 构件类型”汇总出库数据（车次/件数/方量/重量/面积/金额），可与对账单汇总页的合计逐项核对</small></h2>
     <div class="toolbar">
       <button id="btnSummary">生成汇总预览</button>
+      <label class="muted" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
+        <input type="checkbox" id="sumSplit" checked> 按构件类型拆分行（同一天同楼栋不同构件各占一行）
+      </label>
       <label class="muted">导出文件名<small>（默认跟随导入文件名，可修改）</small>
         <input type="text" id="sumOutName" value="当天单楼栋发货汇总.xlsx" style="width:250px;">
       </label>
@@ -288,7 +301,7 @@
     <div id="sumResult" style="display:none;">
       <div id="sumStats"></div>
       <div id="sumWarn" style="display:none;"></div>
-      <div class="muted" style="margin:10px 0 4px;">汇总明细（发货日期 × 楼栋，尾行合计；计价规则与步骤 5 共用）：</div>
+      <div class="muted" style="margin:10px 0 4px;">汇总明细（发货日期 × 楼栋 × 构件类型，尾行合计；计价规则与步骤 5 共用）：</div>
       <div id="sumPreviewWrap"></div>
       <div class="muted" style="margin:12px 0 2px;">对账校核：把对账单汇总页（一般是第一张表）的合计抄到“期望值”，留空的项不参与核对；同时自动比对台账合计。</div>
       <div id="sumVerifyInputs">
@@ -302,6 +315,9 @@
       <div id="sumVerifyBox"></div>
       <div class="toolbar" style="margin-top:10px;">
         <button id="btnSumExport">⬇ 导出汇总 Excel</button>
+        <label class="muted" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="勾选后，导出的工作簿会附上所有已勾选原始货单（每张单一个工作表）">
+          <input type="checkbox" class="srcAttach" checked> 附带原始货单
+        </label>
       </div>
     </div>
   </div>
@@ -350,9 +366,55 @@ var APP_VER=(BM.VERSION||'1.0.0'), APP_DATE=(BM.BUILD_DATE||'');
 
 /* ---------- 文件选择 ---------- */
 drop.addEventListener('click', function(){ fileInput.click(); });
+$('btnPickDir').addEventListener('click', function(e){ e.stopPropagation(); $('dirInput').click(); });
+$('dirInput').addEventListener('change', function(){ handleFiles($('dirInput').files); $('dirInput').value=''; });
 ['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev, function(e){e.preventDefault();drop.classList.add('drag');}); });
 ['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev, function(e){e.preventDefault();drop.classList.remove('drag');}); });
-drop.addEventListener('drop', function(e){ handleFiles(e.dataTransfer.files); });
+
+/* 拖拽：支持直接拖“文件夹”进来（递归读取里面的 .xlsx，适合一天一个文件夹的管理模式） */
+drop.addEventListener('drop', function(e){
+  var dt = e.dataTransfer;
+  var items = dt && dt.items;
+  function fallback(){ handleFiles(dt.files); }
+  if(!items || !items.length || !items[0].webkitGetAsEntry){ fallback(); return; }
+  var files = [], pending = 0, started = false, finished = false;
+  function done(){
+    if(started && !finished && pending === 0){ finished = true; handleFiles(files); }
+  }
+  function walkDir(dir, depth){
+    if(depth > 6) return;                       // 目录层级保护
+    pending++;
+    var reader = dir.createReader();
+    (function readBatch(){
+      reader.readEntries(function(entries){
+        if(!entries.length){ pending--; done(); return; }
+        entries.forEach(function(en){
+          if(en.isFile){
+            pending++;
+            en.file(function(f){ files.push(f); pending--; done(); }, function(){ pending--; done(); });
+          } else if(en.isDirectory){
+            walkDir(en, depth + 1);
+          }
+        });
+        readBatch();                            // readEntries 每次最多返回 100 条，读到空为止
+      }, function(){ pending--; done(); });
+    })();
+  }
+  for(var i = 0; i < items.length; i++){
+    var entry = null;
+    try{ entry = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry(); }catch(_){ /* ignore */ }
+    if(!entry) continue;
+    started = true;
+    if(entry.isFile){
+      pending++;
+      entry.file(function(f){ files.push(f); pending--; done(); }, function(){ pending--; done(); });
+    } else if(entry.isDirectory){
+      walkDir(entry, 0);
+    }
+  }
+  if(!started) fallback();                      // 拿不到 entry（老浏览器）→ 按普通文件处理
+});
+
 fileInput.addEventListener('change', function(){ handleFiles(fileInput.files); fileInput.value=''; });
 
 /* ---------- 重新开始（清空已加载文件，回到选文件界面） ---------- */
@@ -401,10 +463,15 @@ function resetAll(){
 $('btnRestart').addEventListener('click', resetAll);
 
 function handleFiles(fl){
+  var skipped=[], seenName={};
   var arr=[].slice.call(fl).filter(function(f){
-    return /\.xlsx$/i.test(f.name) && !/^~\$/.test(f.name) && !/合并|汇总/.test(f.name);
+    if(!/\.xlsx$/i.test(f.name) || /^~\$/.test(f.name) || /合并|汇总/.test(f.name)){ skipped.push(f.name); return false; }
+    if(seenName[f.name]) return false;          // 文件夹导入时同名文件只取第一个
+    seenName[f.name]=1;
+    return true;
   });
   if(!arr.length){ alert('没有可处理的 .xlsx 文件（已自动排除“合并/汇总”输出文件与临时文件）。'); return; }
+  if(skipped.length){ toast('已跳过 '+skipped.length+' 个非货单文件（输出/临时/非 Excel）'); }
   var todo=arr.length, done=0;
   arr.forEach(function(f){
     f.arrayBuffer().then(function(ab){
@@ -806,12 +873,34 @@ btnMerge.addEventListener('click', function(){
   btnExport.disabled=false;
 });
 
+/* ---------- 导出时附带原始货单（每张已勾选的原始单 = 一个工作表） ---------- */
+function wantAttach(){
+  var boxes=document.querySelectorAll('input.srcAttach');
+  for(var i=0;i<boxes.length;i++){ if(boxes[i].checked) return true; }
+  return false;
+}
+function appendSourceSheets(wb, cfg){
+  if(!wantAttach() || !cfg){ return wb; }
+  var sheets=BM.collectSourceSheets(cfg);
+  var used={}; wb.SheetNames.forEach(function(n){ used[n]=1; });
+  sheets.forEach(function(s){
+    var nm=String(s.name||'原始单'), base=nm, k=2;
+    while(used[nm]) nm=(base.slice(0,28)+'('+ (k++) +')');
+    used[nm]=1;
+    var ws=XLSX.utils.aoa_to_sheet(s.aoa.length ? s.aoa : [['(空表)']]);
+    if(s.cols && s.cols.length) ws['!cols']=s.cols;
+    XLSX.utils.book_append_sheet(wb, ws, nm);
+  });
+  return wb;
+}
+
 btnExport.addEventListener('click', function(){
   if(!lastResult) return;
   var name=($('outName').value||DEF_OUT_MERGED).trim();
   if(!/\.xlsx$/i.test(name)) name+='.xlsx';
   var wb=BM.exportWorkbook(lastResult.rows, lastResult.headers, '发货明细汇总');
-  try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
+  appendSourceSheets(wb, buildConfig());
+  try{ XLSX.writeFile(wb, name); toast('已导出：'+name+(wantAttach()?'（含原始货单 '+ (wb.SheetNames.length-1) +' 张）':'')); }
   catch(e){ alert('导出失败：'+e.message); }
 });
 
@@ -996,7 +1085,8 @@ $('btnLedgerExport').addEventListener('click', function(){
   var name=($('lgOutName').value||'供货明细台账.xlsx').trim();
   if(!/\.xlsx$/i.test(name)) name+='.xlsx';
   var wb=BM.exportLedgerWorkbook(ledgerOut.pages);
-  try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
+  appendSourceSheets(wb, buildConfig());
+  try{ XLSX.writeFile(wb, name); toast('已导出：'+name+(wantAttach()?'（含原始货单 '+ (wb.SheetNames.length-ledgerOut.pages.length) +' 张）':'')); }
   catch(e){ alert('导出失败：'+e.message); }
 });
 
@@ -1036,13 +1126,14 @@ function doSummary(){
     alert('请先在步骤 4 点击“合并并预览”，得到合并数据后再生成汇总。'); return;
   }
   var items=buildSummaryItems();
-  var out=BM.buildDailySummary(items, { priceRules: collectPriceRules() });
+  var splitType=$('sumSplit') ? $('sumSplit').checked : true;
+  var out=BM.buildDailySummary(items, { priceRules: collectPriceRules(), splitType: splitType });
   summaryOut=out;
   sumResultBox.style.display='block';
   // 统计
   var t=out.totals;
   sumStatsBox.innerHTML=
-    '<div><div class="big">'+out.groups.length+'</div><div class="lab">日期×楼栋 分组</div></div>'+
+    '<div><div class="big">'+out.groups.length+'</div><div class="lab">'+(splitType?'日期×楼栋×类型':'日期×楼栋')+' 分组</div></div>'+
     '<div><div class="big">'+t.cars+'</div><div class="lab">车次（按表计）</div></div>'+
     '<div><div class="big">'+t.count+'</div><div class="lab">构件件数</div></div>'+
     '<div><div class="big">'+t.area+'</div><div class="lab">面积合计(m²)</div></div>'+
@@ -1134,7 +1225,8 @@ $('btnSumExport').addEventListener('click', function(){
   var name=($('sumOutName').value||DEF_OUT_SUM).trim();
   if(!/\.xlsx$/i.test(name)) name+='.xlsx';
   var wb=BM.exportSummaryWorkbook(summaryOut);
-  try{ XLSX.writeFile(wb, name); toast('已导出：'+name); }
+  appendSourceSheets(wb, buildConfig());
+  try{ XLSX.writeFile(wb, name); toast('已导出：'+name+(wantAttach()?'（含原始货单 '+ (wb.SheetNames.length-1) +' 张）':'')); }
   catch(e){ alert('导出失败：'+e.message); }
 });
 

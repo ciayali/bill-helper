@@ -6,7 +6,7 @@
   'use strict';
   var root = (typeof globalThis !== 'undefined') ? globalThis : global;
   var XLSX = root.XLSX;
-  var VERSION = '1.2.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
+  var VERSION = '1.3.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
   var BUILD_DATE = '2026-09-21';    // 本版本日期
 
   /* ---------------- 文本工具 ---------------- */
@@ -672,12 +672,13 @@
     return { pages: pages, warnings: uniqWarn(warnings) };
   }
 
-  /* ================= 当天单楼栋发货汇总（日期 × 楼栋） =================
+  /* ================= 当天单楼栋发货汇总（日期 × 楼栋 × 构件类型） =================
    * items（调用方从合并结果提取）：
    *   { d:'yyyy-mm-dd', bld, type, va(单块体积/面积值), wt(单体质量), src:'文件/表'(计车次) }
-   * opts = { priceRules, blankBldLabel }
+   * opts = { priceRules, blankBldLabel, splitType(默认true: 同日同楼栋不同构件类型拆成多行) }
    * 计价规则与台账一致（首中即用）；金额 = 数量×含税单价，数量按规则的计量方式取 va。
-   * 返回 { groups:[{date,bld,labels,cars,count,vol,wt,area,amt}], totals:{...}, warnings }
+   * 返回 { groups:[{date,bld,label,labels,cars,count,vol,wt,area,amt}], totals:{...}, warnings }
+   * totals.cars = 去重后的实际送货单张数（不因拆类型重复计）
    */
   function matchRule(type, rules) {
     for (var ri = 0; ri < rules.length; ri++) {
@@ -702,8 +703,10 @@
     function num(v) { var n = parseFloat(v); return isNaN(n) ? null : n; }
     function r2(x) { return Math.round(x * 100) / 100; }
 
-    var map = {};      // key: date+\u0001+bld
+    var splitType = opts.splitType !== false;   // 默认按 构件类型 拆分：同一天同楼栋不同构件各占一行
+    var map = {};      // key: date+\u0001+bld(\u0001+label)
     var order = [];
+    var carSeen = {};  // 全局车次去重（合计行的车次=实际送货单张数，不因拆类型而重复计）
     items.forEach(function (it) {
       var d = toDateText(it.d);
       if (!d) { warnings.push('明细缺少日期（' + (it.src || '?') + '），未计入汇总'); return; }
@@ -720,37 +723,46 @@
         warnings.push('构件缺少' + (m.rule.unit === '面积' ? '面积' : '体积') + '：' + (it.src || '') + '（' + bld + '），按 0 计');
       }
       var wt = num(it.wt); if (wt === null || wt < 0) wt = 0;
-      var key = d + '\u0001' + bld;
+      var label = m.rule.label;
+      var key = d + '\u0001' + bld + (splitType ? '\u0001' + label : '');
       var g = map[key];
       if (!g) {
-        g = map[key] = { date: d, bld: bld, labels: [], labelSet: {}, cars: {}, carN: 0,
+        g = map[key] = { date: d, bld: bld, label: label, li: m.idx,
+                         labels: [label], labelSet: {}, cars: {}, carN: 0,
                          count: 0, vol: 0, wt: 0, area: 0, amt: 0 };
+        g.labelSet[label] = 1;
         order.push(key);
       }
+      if (!splitType && !g.labelSet[label]) { g.labelSet[label] = 1; g.labels.push(label); }
       g.count++;
       if (m.rule.unit === '面积') g.area += qty; else g.vol += qty;
       g.wt += wt;
       g.amt += qty * m.rule.price;
-      if (!g.labelSet[m.rule.label]) { g.labelSet[m.rule.label] = 1; g.labels.push(m.rule.label); }
       var src = clean(it.src);
-      if (src && !g.cars[src]) { g.cars[src] = 1; g.carN++; }
+      if (src) {
+        if (!g.cars[src]) { g.cars[src] = 1; g.carN++; }
+        if (!carSeen[src]) carSeen[src] = 1;
+      }
     });
 
     order.sort(function (a, b) {
       var ga = map[a], gb = map[b];
       if (ga.date !== gb.date) return ga.date < gb.date ? -1 : 1;
       if (ga.bld !== gb.bld) return ga.bld < gb.bld ? -1 : 1;
+      if (ga.li !== gb.li) return ga.li - gb.li;
+      if (ga.label !== gb.label) return ga.label < gb.label ? -1 : 1;
       return 0;
     });
     var groups = order.map(function (k) {
       var g = map[k];
-      return { date: g.date, bld: g.bld, labels: g.labels.join('、'),
+      return { date: g.date, bld: g.bld, label: g.label, labels: g.labels.join('、'),
                cars: g.carN, count: g.count, vol: round3(g.vol), wt: round3(g.wt),
                area: round3(g.area), amt: r2(g.amt) };
     });
     var totals = { cars: 0, count: 0, vol: 0, wt: 0, area: 0, amt: 0 };
+    Object.keys(carSeen).forEach(function () { totals.cars++; });
     groups.forEach(function (g) {
-      totals.cars += g.cars; totals.count += g.count;
+      totals.count += g.count;
       totals.vol += g.vol; totals.wt += g.wt; totals.area += g.area; totals.amt += g.amt;
     });
     totals.vol = round3(totals.vol); totals.wt = round3(totals.wt);
@@ -840,6 +852,42 @@
     return wb;
   }
 
+  /* ---------- 原始货单附带导出 ----------
+   * 从 merge 的同一份 config 里，取出所有被勾选(include)的工作表原始内容，
+   * 供导出时以“每张原始单 = 一个工作表”的方式附到导出工作簿后面。
+   * 返回 [{file, sheet, name(建议表名，≤31字), aoa, cols(建议列宽)}]
+   */
+  function collectSourceSheets(config) {
+    var out = [];
+    (config.files || []).forEach(function (f) {
+      var fn = f.name || '文件';
+      var sheetCfg = (config.sheets && config.sheets[fn]) || {};
+      var wb = f.wb;
+      if (!wb || !wb.SheetNames) return;
+      // 本文件里被勾选的表数（>1 时表名要带 sheet 名区分）
+      var incNames = wb.SheetNames.filter(function (sn) {
+        var sc = sheetCfg[sn] || {};
+        return sc.include !== false && (sc.include === true || sc.include);
+      });
+      wb.SheetNames.forEach(function (sn) {
+        var sc = sheetCfg[sn] || {};
+        if (!sc.include) return;
+        var ws = wb.Sheets[sn];
+        if (!ws || !ws['!ref']) return;
+        var aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+        // 建议表名：优先用文件名（一般一单一张表）；一单多表时追加 sheet 名
+        var base = String(fn).replace(/\.xlsx$/i, '').replace(/[\\\/\?\*\[\]:]/g, '');
+        var nm = incNames.length > 1 ? (base + '-' + sn) : base;
+        nm = nm.slice(0, 31);
+        out.push({
+          file: fn, sheet: sn, name: nm, aoa: aoa,
+          cols: (ws['!cols'] || []).slice(0, 40)
+        });
+      });
+    });
+    return out;
+  }
+
   /* ---------------- 导出接口 ---------------- */
   var api = {
     VERSION: VERSION,
@@ -860,6 +908,7 @@
     exportWorkbook: exportWorkbook,
     exportLedgerWorkbook: exportLedgerWorkbook,
     exportSummaryWorkbook: exportSummaryWorkbook,
+    collectSourceSheets: collectSourceSheets,
     SYNONYMS: SYNONYMS
   };
 
