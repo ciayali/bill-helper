@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 v1.5.0 · 本地离线版</title>
+<title>账单合并工具 v1.5.1 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -146,7 +146,7 @@
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.5.0</b></span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.5.1</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
@@ -365,7 +365,8 @@ var TPL = ['序号','发货时间','构件编号','楼栋','楼层','构件类�
 var state = { books: [], sample: null }; // sample = {fn, sn, ws, headerRow}
 /* 诊断/自动化测试钩子（正常使用无影响；函数声明有提升，此处可直接引用） */
 window.__testHooks = { state: state, handleFiles: handleFiles, buildConfig: buildConfig, exportWithAttach: exportWithAttach,
-                       bldFromFileName: bldFromFileName, rowQty: rowQty };
+                       bldFromFileName: bldFromFileName, rowQty: rowQty, collectPriceRules: collectPriceRules,
+                       mapRulePrices: mapRulePrices };
 
 var $ = function(id){ return document.getElementById(id); };
 
@@ -1117,6 +1118,13 @@ var cardLedger=$('cardLedger'), lgResultBox=$('lgResult'), lgWarnBox=$('lgWarn')
     lgPageInfo=$('lgPageInfo');   // 以前靠浏览器"id 自动全局变量"侥幸可用，这里显式声明
 var ledgerOut=null;      // {pages, warnings}
 var extraRules=[];       // 用户自定义计价规则 {label,kw[],exclude[],unit,price}
+/* v1.5.1 修复：新增规则行的价格框按列固定（第1框=元/m³列、第2框=元/m²列，与表头一致），
+   但 rule.price 必须指「计量方式那一档」的单价、price2 指另一档——和内置规则口径相同。
+   上一版的 bug：不管计量方式选什么，都把第1框当 price，选「面积」时读错列 → 单价变 0。 */
+function mapRulePrices(unit, pV, pA){
+  var pv=(isNaN(pV)||pV<=0)?0:pV, pa=(isNaN(pA)||pA<=0)?0:pA;
+  return unit==='面积' ? {price:pa, price2:pv} : {price:pv, price2:pa};
+}
 
 $('lgSeg').addEventListener('change', function(){
   $('cutDayWrap').style.display = $('lgSeg').value==='cutday' ? '' : 'none';
@@ -1130,18 +1138,19 @@ $('btnAddRule').addEventListener('click', function(){
     '<td><input type="text" class="rKw" placeholder="如：叠合板（逗号分隔）" style="width:150px;"></td>'+
     '<td><input type="text" class="rEx" placeholder="排除词(可空)" style="width:110px;"></td>'+
     '<td><select class="rUnit"><option value="体积">体积 m³</option><option value="面积">面积 m²</option></select></td>'+
-    '<td><input type="number" class="rPrice" value="0" title="优先口径的单价" style="width:92px;"></td>'+
-    '<td><input type="number" class="rPrice2" value="" placeholder="留空=不启用" title="另一口径的单价：优先口径缺数量时自动改用" style="width:92px;"></td>'+
+    '<td><input type="number" class="rPrice" value="" placeholder="元/m³单价" title="若计量方式选「体积」，这格是优先单价" style="width:92px;"></td>'+
+    '<td><input type="number" class="rPrice2" value="" placeholder="元/m²单价" title="若计量方式选「面积」，这格是优先单价" style="width:92px;"></td>'+
     '<td><button class="ruleDel" title="删除">✕</button></td>';
   $('lgRuleRows').appendChild(tr);
   function sync(){ rule.label=tr.querySelector('.rName').value.trim();
     rule.kwText=tr.querySelector('.rKw').value;
     rule.excludeText=tr.querySelector('.rEx').value;
-    rule.unit=tr.querySelector('.rUnit').value;
-    rule.price=parseFloat(tr.querySelector('.rPrice').value)||0;
-    var p2=tr.querySelector('.rPrice2').value;
-    rule.price2=(p2===''||isNaN(parseFloat(p2)))?0:parseFloat(p2); }
-  tr.querySelectorAll('input,select').forEach(function(el){ el.addEventListener('input', sync); });
+    var u=tr.querySelector('.rUnit').value;
+    rule.unit=u;
+    var m=mapRulePrices(u, parseFloat(tr.querySelector('.rPrice').value), parseFloat(tr.querySelector('.rPrice2').value));
+    rule.price=m.price; rule.price2=m.price2;
+  }
+  tr.querySelectorAll('input,select').forEach(function(el){ el.addEventListener('input', sync); el.addEventListener('change', sync); });
   tr.querySelector('.ruleDel').addEventListener('click', function(){
     tr.remove(); extraRules.splice(extraRules.indexOf(rule),1);
   });
@@ -1151,7 +1160,7 @@ $('btnAddRule').addEventListener('click', function(){
 
 /* 取一行明细的「体积 / 面积」两个口径：
    - 源表那一列装的究竟是体积还是面积，由 core 写进 rowMeta.qty（按源表头判定）；
-   - v1.5.0 起「推算」默认关闭：缺的那一栏直接留空（只填单据原值），
+   - 「推算」默认关闭：缺的那一栏直接留空（只填单据原值），
      计价缺口径由步骤 5 的双价规则解决（长×宽是毛面积，异形板不准）；
    - 判定不出语义时保持旧行为：两个口径都用同一个数（既有项目数值不变）。 */
 var derivedQtyCount=0;      // 本批有多少块用了推算（只用于提示，不影响计算）

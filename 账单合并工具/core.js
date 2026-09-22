@@ -6,8 +6,8 @@
   'use strict';
   var root = (typeof globalThis !== 'undefined') ? globalThis : global;
   var XLSX = root.XLSX;
-  var VERSION = '1.5.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
-  var BUILD_DATE = '2026-09-21';    // 本版本日期
+  var VERSION = '1.5.1';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
+  var BUILD_DATE = '2026-09-22';    // 本版本日期
 
   /* ---------------- 文本工具 ---------------- */
 
@@ -624,8 +624,10 @@
    * price=0 视为“已填”（未匹配规则的兜底按 0 元记）；price2 必须 >0 才启用。 */
   function pickPricing(rule, primQty, altQty) {
     function pn(v) { if (v === undefined || v === null || v === '') return null; var n = parseFloat(v); return isNaN(n) ? null : n; }
+    /* v1.5.1 修复：单价为 0 或空一律视为「未启用」——否则新增规则行默认 price=0 会
+     * 挡住双价自动选路（拿到 0 就直接返回，永远轮不到 price2），金额全部变 0 */
     var pPrice = pn(rule.price);
-    if (primQty !== undefined && primQty !== null && primQty >= 0 && pPrice !== null)
+    if (primQty !== undefined && primQty !== null && primQty >= 0 && pPrice !== null && pPrice > 0)
       return { qty: primQty, unit: rule.unit, price: pPrice };
     var aPrice = pn(rule.price2);
     if (altQty !== undefined && altQty !== null && altQty >= 0 && aPrice !== null && aPrice > 0)
@@ -678,7 +680,7 @@
       var spec = (w !== null && l !== null && h !== null) ? w + '*' + l + '*' + h : '';
       if (!rule) {
         warnings.push('构件类型“' + (type || '(空)') + '”未匹配计价规则（' + bld + ' ' + (r.code || '') + '），按单价0记入，请检查');
-        rule = { label: type || '未分类', unit: '体积', price: 0 };
+        rule = { label: type || '未分类', unit: '体积', price: 0, noRule: true };
       }
       /* v1.5.0 双价计价：优先口径（rule.unit）有数量且已填单价 → 直接用；
        * 否则若另一口径的数量与 price2 齐备 → 自动改用（不再用长×宽推算面积） */
@@ -686,6 +688,9 @@
       var pr = pickPricing(rule, primVol ? num(r.vol) : num(r.area), primVol ? num(r.area) : num(r.vol));
       var qty = '', unit = rule.unit, price = 0;
       if (pr) { qty = pr.qty; unit = pr.unit; price = pr.price; }
+      else if (rule.noRule) {                       // 未匹配规则：只报一次“未匹配”，数量照常填、单价 0
+        qty = primVol ? (num(r.vol) || 0) : (num(r.area) || 0);
+      }
       else warnings.push('构件缺少' + (rule.unit === '面积' ? '面积' : '体积') +
         '且未填「' + (rule.unit === '面积' ? '体积' : '面积') + '」单价（可在计价规则里把两个价都填上）：' +
         rule.label + ' ' + (r.code || '') + '（' + bld + '），金额留空');
@@ -832,7 +837,7 @@
       var m = matchRule(type, rules);
       if (!m) {
         warnings.push('构件类型“' + (type || '(空)') + '”未匹配计价规则（' + bld + '），金额按 0 记');
-        m = { rule: { label: type || '未分类', unit: '体积', price: 0 }, idx: 1e9 };
+        m = { rule: { label: type || '未分类', unit: '体积', price: 0, noRule: true }, idx: 1e9 };
       }
       // 取值口径：优先用调用方按语义分开给的 vol / area；两项都没给时（老调用方只传 va）
       // 退回旧口径：把 va 当作优先口径的数量，保证既有项目（如太和、尚谷大院）数值不变。
@@ -847,6 +852,9 @@
       /* v1.5.0 双价计价：优先口径缺数量（或未填该价）时，若另一口径的量与 price2 齐备则自动改用 */
       var pr = pickPricing(m.rule, qty, hasSplit ? (primVol ? aNum : vNum) : null);
       if (pr) { qty = pr.qty; }
+      else if (m.rule.noRule) {                     // 未匹配规则：只报一次“未匹配”，按 0 计
+        qty = (qty === null || qty < 0) ? 0 : qty;
+      }
       else {
         qty = (qty === null || qty < 0) ? 0 : qty;
         warnings.push('构件缺少' + (m.rule.unit === '面积' ? '面积' : '体积') +
