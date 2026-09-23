@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>账单合并工具 v1.5.1 · 本地离线版</title>
+<title>账单合并工具 v1.6.0 · 本地离线版</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --line:#e2e6ec; --txt:#232a35; --sub:#6a7686;
@@ -146,7 +146,7 @@
 <body>
 <header>
   <h1>🧾 账单 / 发货单 合并工具</h1>
-  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.5.1</b></span>
+  <span>本地运行 · 数据不出本机 · 兼容不同项目格式 · <b id="hdrVer">v1.6.0</b></span>
 </header>
 <button id="btnRestart" title="清空当前文件，回到重新选择文件界面">↺ 重新选文件</button>
 
@@ -308,9 +308,7 @@
     <h2><span class="step-tag">6</span>当天单楼栋发货汇总 &amp; 对账校核<small>按“发货日期 × 楼栋 × 构件类型”汇总出库数据（车次/件数/方量/重量/面积/金额），可与对账单汇总页的合计逐项核对</small></h2>
     <div class="toolbar">
       <button id="btnSummary">生成汇总预览</button>
-      <label class="muted" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;">
-        <input type="checkbox" id="sumSplit" checked> 按构件类型拆分行（同一天同楼栋不同构件各占一行）
-      </label>
+      <span class="muted">同一天同楼栋按构件类型各占一行（单价不同，必须分开计价）；日期口径（日期偏移、仅统计范围）跟随步骤 5</span>
       <label class="muted">导出文件名<small>（默认跟随导入文件名，可修改）</small>
         <input type="text" id="sumOutName" value="当天单楼栋发货汇总.xlsx" style="width:250px;">
       </label>
@@ -366,7 +364,7 @@ var state = { books: [], sample: null }; // sample = {fn, sn, ws, headerRow}
 /* 诊断/自动化测试钩子（正常使用无影响；函数声明有提升，此处可直接引用） */
 window.__testHooks = { state: state, handleFiles: handleFiles, buildConfig: buildConfig, exportWithAttach: exportWithAttach,
                        bldFromFileName: bldFromFileName, rowQty: rowQty, collectPriceRules: collectPriceRules,
-                       mapRulePrices: mapRulePrices };
+                       mapRulePrices: mapRulePrices, buildSummaryItems: buildSummaryItems };
 
 var $ = function(id){ return document.getElementById(id); };
 
@@ -1118,7 +1116,7 @@ var cardLedger=$('cardLedger'), lgResultBox=$('lgResult'), lgWarnBox=$('lgWarn')
     lgPageInfo=$('lgPageInfo');   // 以前靠浏览器"id 自动全局变量"侥幸可用，这里显式声明
 var ledgerOut=null;      // {pages, warnings}
 var extraRules=[];       // 用户自定义计价规则 {label,kw[],exclude[],unit,price}
-/* v1.5.1 修复：新增规则行的价格框按列固定（第1框=元/m³列、第2框=元/m²列，与表头一致），
+/* 上一版修复：新增规则行的价格框按列固定（第1框=元/m³列、第2框=元/m²列，与表头一致），
    但 rule.price 必须指「计量方式那一档」的单价、price2 指另一档——和内置规则口径相同。
    上一版的 bug：不管计量方式选什么，都把第1框当 price，选「面积」时读错列 → 单价变 0。 */
 function mapRulePrices(unit, pV, pA){
@@ -1187,6 +1185,20 @@ function rowQty(r, meta, idx, useDerive){
 }
 
 /* 从合并结果构造 buildLedger 输入行 */
+/* 步骤 5 的日期口径（偏移 + 仅统计范围）——台账与汇总共用，保证两边口径一致。
+   v1.6.0 起汇总也跟随这套口径（此前只在台账生效，勾了日期范围汇总不变）。 */
+function ledgerDateOpts(){
+  function shiftD(d,o){
+    if(!o) return d;
+    var p=d.split('-'); var dt=new Date(+p[0], +p[1]-1, +p[2]+o);
+    return dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2);
+  }
+  return { shiftD:shiftD,
+           off:parseInt(($('lgDayOff')&&$('lgDayOff').value),10)||0,
+           fromV:$('lgFrom')?$('lgFrom').value:'',
+           toV:$('lgTo')?$('lgTo').value:'' };
+}
+
 function buildLedgerRowsFromResult(){
   var H={};
   lastResult.headers.forEach(function(h,i){ H[BM.clean(h)]=i; });
@@ -1200,13 +1212,7 @@ function buildLedgerRowsFromResult(){
   var metaAll=lastResult.rowMeta||[];
   derivedQtyCount=0;
   function g(r,i){ return (i>=0 && i<r.length) ? r[i] : ''; }
-  function shiftD(d,o){
-    if(!o) return d;
-    var p=d.split('-'); var dt=new Date(+p[0], +p[1]-1, +p[2]+o);
-    return dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2);
-  }
-  var off=parseInt($('lgDayOff').value,10)||0;
-  var fromV=$('lgFrom').value, toV=$('lgTo').value;
+  var dt=ledgerDateOpts(), shiftD=dt.shiftD, off=dt.off, fromV=dt.fromV, toV=dt.toV;
   var rows=[];
   lastResult.rows.forEach(function(r,ri){
     var code=BM.clean(g(r,iCode)), type=BM.clean(g(r,iType)), bld=BM.clean(g(r,iBld));
@@ -1358,6 +1364,8 @@ function buildSummaryItems(){
       iVA=I('单块体积/面积'), iWt=I('单体质量'),
       iD=(I('发货时间')>=0? I('发货时间') : I('发货日期'));
   var idx={ va:iVA, w:I('板宽(mm)'), l:I('板长(mm)'), h:I('板厚(mm)') };
+  /* v1.6.0：日期口径跟随步骤 5（偏移 + 仅统计范围）——台账勾了日期，汇总必须同步 */
+  var dt=ledgerDateOpts(), shiftD=dt.shiftD, off=dt.off, fromV=dt.fromV, toV=dt.toV;
   var useDerive=!$('deriveArea') || $('deriveArea').checked;
   var meta=lastResult.rowMeta||[];
   derivedQtyCount=0;
@@ -1366,11 +1374,15 @@ function buildSummaryItems(){
   lastResult.rows.forEach(function(r,ri){
     var code=BM.clean(g(r,iCode)), type=BM.clean(g(r,iType)), bld=BM.clean(g(r,iBld));
     if(!code && !type && !bld) return;                    // 空白行
+    var d=BM.toDateText(g(r,iD));
+    if(d && off) d=shiftD(d,off);
+    if(d && fromV && d<fromV) return;                     // 范围外：与台账同口径剔除
+    if(d && toV && d>toV) return;
     var m=meta[ri]||{};
     var q=rowQty(r, m, idx, useDerive);
     if(q.derived) derivedQtyCount++;
     items.push({
-      d: BM.toDateText(g(r,iD)),
+      d: d,
       bld: g(r,iBld), type: g(r,iType),
       vol: q.vol, area: q.area,          // 按语义分开给；台账/汇总各取所需
       va: parseFloat(g(r,iVA)),          // 兼容字段：语义判不出时 core 会退回用它
@@ -1386,7 +1398,8 @@ function doSummary(){
     alert('请先在步骤 4 点击“合并并预览”，得到合并数据后再生成汇总。'); return;
   }
   var items=buildSummaryItems();
-  var splitType=$('sumSplit') ? $('sumSplit').checked : true;
+  /* v1.6.0：固定按构件类型拆行——不同构件单价不同，并成一行没法分开计价（用户明确要求） */
+  var splitType=true;
   var out=BM.buildDailySummary(items, { priceRules: collectPriceRules(), splitType: splitType });
   summaryOut=out;
   if(derivedQtyCount && out.warnings){

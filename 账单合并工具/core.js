@@ -6,8 +6,8 @@
   'use strict';
   var root = (typeof globalThis !== 'undefined') ? globalThis : global;
   var XLSX = root.XLSX;
-  var VERSION = '1.5.1';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
-  var BUILD_DATE = '2026-09-22';    // 本版本日期
+  var VERSION = '1.6.0';            // 工具版本号：每次更新必须递增（唯一来源，见 CHANGELOG.md）
+  var BUILD_DATE = '2026-09-23';    // 本版本日期
 
   /* ---------------- 文本工具 ---------------- */
 
